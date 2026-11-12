@@ -202,7 +202,7 @@ sequenceDiagram
     API->>S: register()
     S->>DB: Tìm user theo identifier
     alt Đã ACTIVE, hoặc PENDING mà OTP cũ còn hiệu lực
-        S-->>API: Không làm gì (không lộ là đã tồn tại; mật khẩu cũ giữ nguyên)
+        S-->>API: Không làm gì (không lộ là đã tồn tại, mật khẩu cũ giữ nguyên)
     else Mới, hoặc PENDING và OTP cũ đã hết hạn
         S->>DB: INSERT user PENDING ON CONFLICT DO NOTHING (chỉ khi user mới)
         S->>R: Lưu HMAC(OTP), attempts=0, TTL 5 phút
