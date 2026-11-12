@@ -17,11 +17,10 @@ import org.springframework.stereotype.Component;
 @Component
 class RedisOtpStore implements OtpStore {
 
-    /** Stores the code hash and resets the attempt counter in one step, with the TTL. */
+    /** Overwrites the code hash, resets the attempt counter and sets the TTL in one step. */
     private static final RedisScript<Long> SAVE =
             RedisScript.of(
                     """
-                    redis.call('DEL', KEYS[1])
                     redis.call('HSET', KEYS[1], 'code', ARGV[1], 'attempts', 0)
                     redis.call('PEXPIRE', KEYS[1], ARGV[2])
                     return 1

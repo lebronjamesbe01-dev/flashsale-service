@@ -178,13 +178,46 @@ class AuthFlowIntegrationTest {
     }
 
     @Test
-    void registeringAgainWhileACodeIsLiveCannotSwapThePassword() throws Exception {
+    void passwordGivenAtVerifyWinsOverTheOneGivenAtRegister() throws Exception {
+        String email = uniqueEmail();
+        register(email, "Attacker999").andExpect(status().isAccepted());
+        verify(email, latestOtp(email), "Victim12345").andExpect(status().isOk());
+        login(email, "Victim12345").andExpect(status().isOk());
+        login(email, "Attacker999").andExpect(status().isUnauthorized());
+    }
+
+    @Test
+    void registeringAgainOnAPendingAccountNeverChangesThePassword() throws Exception {
         String email = uniqueEmail();
         register(email, PASSWORD);
         register(email, "Attacker999").andExpect(status().isAccepted());
-        verify(email, latestOtp(email)).andExpect(status().isOk());
-        login(email, PASSWORD).andExpect(status().isOk());
+        verify(email, latestOtp(email), "Victim12345").andExpect(status().isOk());
+        login(email, "Victim12345").andExpect(status().isOk());
         login(email, "Attacker999").andExpect(status().isUnauthorized());
+        login(email, PASSWORD).andExpect(status().isUnauthorized());
+    }
+
+    @Test
+    void passwordLongerThan72BytesIsRejectedWith400() throws Exception {
+        String tooLong = "Ab1" + "\u00e9".repeat(40); // 43 characters, 83 UTF-8 bytes
+        register(uniqueEmail(), tooLong)
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("VALIDATION_FAILED"))
+                .andExpect(jsonPath("$.fields.password").exists());
+        String email = uniqueEmail();
+        register(email, PASSWORD);
+        verify(email, latestOtp(email), tooLong)
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("VALIDATION_FAILED"));
+    }
+
+    @Test
+    void weakPasswordAtVerifyIsRejectedAndKeepsTheOtpUsable() throws Exception {
+        String email = uniqueEmail();
+        register(email, PASSWORD);
+        String otp = latestOtp(email);
+        verify(email, otp, "short").andExpect(status().isBadRequest());
+        verify(email, otp, PASSWORD).andExpect(status().isOk());
     }
 
     @Test
@@ -255,9 +288,14 @@ class AuthFlowIntegrationTest {
     }
 
     private ResultActions verify(String identifier, String otp) throws Exception {
+        return verify(identifier, otp, PASSWORD);
+    }
+
+    private ResultActions verify(String identifier, String otp, String password) throws Exception {
         return post(
                 "/api/v1/auth/verify-otp",
-                "{\"identifier\":\"" + identifier + "\",\"otp\":\"" + otp + "\"}");
+                "{\"identifier\":\"%s\",\"otp\":\"%s\",\"password\":\"%s\"}"
+                        .formatted(identifier, otp, password));
     }
 
     private ResultActions login(String identifier, String password) throws Exception {

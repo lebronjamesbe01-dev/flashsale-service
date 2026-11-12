@@ -16,20 +16,19 @@ final class AuthDtos {
                     @NotBlank
                     @Size(max = 320)
                     String identifier,
-            @Schema(example = "Secret123")
-                    @NotBlank
-                    @Size(min = 8, max = 72, message = "must be 8 to 72 characters")
-                    @Pattern(
-                            regexp = "^(?=.*[A-Za-z])(?=.*\\d).+$",
-                            message = "must contain at least one letter and one digit")
-                    String password) {}
+            @Schema(example = "Secret123") @NewPassword String password) {}
 
     record VerifyOtpRequest(
             @NotBlank @Size(max = 320) String identifier,
             @Schema(example = "123456")
                     @NotBlank
                     @Pattern(regexp = "^\\d{6}$", message = "must be 6 digits")
-                    String otp) {}
+                    String otp,
+            @Schema(
+                            description = "Password the account will use from now on",
+                            example = "Secret123")
+                    @NewPassword
+                    String password) {}
 
     record IdentifierRequest(@NotBlank @Size(max = 320) String identifier) {}
 

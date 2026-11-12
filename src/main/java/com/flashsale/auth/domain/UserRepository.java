@@ -26,10 +26,15 @@ public interface UserRepository extends JpaRepository<User, UUID> {
             nativeQuery = true)
     int insertIfAbsent(@Param("u") User user);
 
+    /** Activates a pending account and sets the password chosen at OTP verification. */
     @Modifying(flushAutomatically = true)
     @Query(
             "update User u set u.status = com.flashsale.auth.domain.UserStatus.ACTIVE,"
-                    + " u.updatedAt = :now, u.version = u.version + 1"
+                    + " u.passwordHash = :passwordHash, u.updatedAt = :now,"
+                    + " u.version = u.version + 1"
                     + " where u.id = :id and u.status = com.flashsale.auth.domain.UserStatus.PENDING")
-    int activateIfPending(@Param("id") UUID id, @Param("now") Instant now);
+    int activateIfPending(
+            @Param("id") UUID id,
+            @Param("passwordHash") String passwordHash,
+            @Param("now") Instant now);
 }

@@ -62,11 +62,9 @@ public class RegistrationService {
         String passwordHash = passwordEncoder.encode(rawPassword);
         Optional<User> existing = users.findByIdentifier(identifier.value());
         if (existing.isPresent()) {
-            User user = existing.get();
-            // While a code is live, a second registration must not swap the password: otherwise
-            // whoever registers last would own the account once the real owner enters the code.
-            if (user.isPending() && !otpStore.exists(identifier)) {
-                user.replacePendingPassword(passwordHash, clock.now());
+            // The password given here never counts for an existing account: the password is set
+            // by whoever proves the identifier with the OTP (verifyOtp).
+            if (existing.get().isPending() && !otpStore.exists(identifier)) {
                 sendOtpIfCooledDown(identifier);
             } else {
                 log.info("Register attempt ignored for {}", identifier.masked());
@@ -84,7 +82,7 @@ public class RegistrationService {
     }
 
     @Transactional
-    public void verifyOtp(Identifier identifier, String code) {
+    public void verifyOtp(Identifier identifier, String code, String rawPassword) {
         String expectedHash =
                 otpStore.registerAttempt(identifier, properties.otpMaxAttempts())
                         .orElseThrow(() -> new BusinessException(ErrorCode.OTP_INVALID));
@@ -94,8 +92,11 @@ public class RegistrationService {
         User user =
                 users.findByIdentifier(identifier.value())
                         .orElseThrow(() -> new BusinessException(ErrorCode.OTP_INVALID));
-        // Conditional update: two parallel correct verifications activate (and open a wallet) once.
-        if (users.activateIfPending(user.id(), clock.now()) == 1) {
+        // Whoever proves the identifier sets the password, so someone who pre-registered it cannot
+        // keep the account. Conditional update: two parallel correct verifications activate (and
+        // open a wallet) once.
+        String passwordHash = passwordEncoder.encode(rawPassword);
+        if (users.activateIfPending(user.id(), passwordHash, clock.now()) == 1) {
             events.publishEvent(new UserActivated(user.id()));
         }
         TransactionSynchronizationManager.registerSynchronization(

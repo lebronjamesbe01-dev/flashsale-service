@@ -34,14 +34,21 @@ class JwtConfig {
     }
 
     @Bean
-    JwtEncoder jwtEncoder(AuthProperties properties) {
-        return new NimbusJwtEncoder(new ImmutableSecret<SecurityContext>(secretKey(properties)));
+    SecretKey jwtSecretKey(AuthProperties properties) {
+        return new SecretKeySpec(
+                properties.jwtSecret().getBytes(StandardCharsets.UTF_8), "HmacSHA256");
     }
 
     @Bean
-    JwtDecoder jwtDecoder(AuthProperties properties, AccessTokenRevocation revocation) {
+    JwtEncoder jwtEncoder(SecretKey jwtSecretKey) {
+        return new NimbusJwtEncoder(new ImmutableSecret<SecurityContext>(jwtSecretKey));
+    }
+
+    @Bean
+    JwtDecoder jwtDecoder(
+            SecretKey jwtSecretKey, AuthProperties properties, AccessTokenRevocation revocation) {
         NimbusJwtDecoder decoder =
-                NimbusJwtDecoder.withSecretKey(secretKey(properties))
+                NimbusJwtDecoder.withSecretKey(jwtSecretKey)
                         .macAlgorithm(MacAlgorithm.HS256)
                         .build();
         decoder.setJwtValidator(
@@ -56,10 +63,5 @@ class JwtConfig {
                                                         "Token has been revoked",
                                                         null))));
         return decoder;
-    }
-
-    private static SecretKey secretKey(AuthProperties properties) {
-        return new SecretKeySpec(
-                properties.jwtSecret().getBytes(StandardCharsets.UTF_8), "HmacSHA256");
     }
 }

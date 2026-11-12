@@ -62,7 +62,7 @@ class AuthController {
     @PostMapping("/register")
     @ResponseStatus(HttpStatus.ACCEPTED)
     MessageResponse register(@Valid @RequestBody RegisterRequest body, HttpServletRequest http) {
-        rateLimiter.check("register-ip", http.getRemoteAddr(), 10, MINUTE);
+        rateLimiter.check("register-ip", clientIp(http), 10, MINUTE);
         Identifier identifier = IdentifierParser.parse(body.identifier());
         registration.register(identifier, body.password());
         return new MessageResponse(OTP_SENT);
@@ -70,15 +70,17 @@ class AuthController {
 
     @Operation(
             summary = "Verify OTP and activate the account",
-            description = "Five wrong codes destroy the OTP; request a new one with resend-otp.")
+            description =
+                    "Proves ownership of the identifier and sets the account password. Five wrong"
+                            + " codes destroy the OTP; request a new one with resend-otp.")
     @SecurityRequirements
     @PostMapping("/verify-otp")
     MessageResponse verifyOtp(@Valid @RequestBody VerifyOtpRequest body, HttpServletRequest http) {
-        rateLimiter.check("verify-ip", http.getRemoteAddr(), 30, MINUTE);
+        rateLimiter.check("verify-ip", clientIp(http), 30, MINUTE);
         Identifier identifier = IdentifierParser.parse(body.identifier());
         // Caps guesses across resends too: 5 per code, at most 10 per hour per identifier.
         rateLimiter.check("verify-id", identifier.value(), 10, HOUR);
-        registration.verifyOtp(identifier, body.otp());
+        registration.verifyOtp(identifier, body.otp(), body.password());
         return new MessageResponse("Account verified. You can now log in.");
     }
 
@@ -89,7 +91,7 @@ class AuthController {
     @PostMapping("/resend-otp")
     @ResponseStatus(HttpStatus.ACCEPTED)
     MessageResponse resendOtp(@Valid @RequestBody IdentifierRequest body, HttpServletRequest http) {
-        rateLimiter.check("resend-ip", http.getRemoteAddr(), 10, MINUTE);
+        rateLimiter.check("resend-ip", clientIp(http), 10, MINUTE);
         Identifier identifier = IdentifierParser.parse(body.identifier());
         rateLimiter.check("resend-id", identifier.value(), 5, HOUR);
         registration.resendOtp(identifier);
@@ -104,7 +106,7 @@ class AuthController {
     @SecurityRequirements
     @PostMapping("/login")
     TokenResponse login(@Valid @RequestBody LoginRequest body, HttpServletRequest http) {
-        rateLimiter.check("login-ip", http.getRemoteAddr(), 20, MINUTE);
+        rateLimiter.check("login-ip", clientIp(http), 20, MINUTE);
         Identifier identifier = IdentifierParser.parse(body.identifier());
         rateLimiter.check("login-id", identifier.value(), 10, MINUTE);
         return TokenResponse.of(authentication.login(identifier, body.password()));
@@ -117,7 +119,7 @@ class AuthController {
     @SecurityRequirements
     @PostMapping("/refresh")
     TokenResponse refresh(@Valid @RequestBody RefreshRequest body, HttpServletRequest http) {
-        rateLimiter.check("refresh-ip", http.getRemoteAddr(), 30, MINUTE);
+        rateLimiter.check("refresh-ip", clientIp(http), 30, MINUTE);
         return TokenResponse.of(authentication.refresh(body.refreshToken()));
     }
 
@@ -135,6 +137,11 @@ class AuthController {
                 jwt.getId(),
                 jwt.getExpiresAt(),
                 body == null ? null : body.refreshToken());
+    }
+
+    /** Behind nginx the container is configured to resolve the real client address here. */
+    private static String clientIp(HttpServletRequest http) {
+        return http.getRemoteAddr();
     }
 
     @Operation(summary = "Current user")

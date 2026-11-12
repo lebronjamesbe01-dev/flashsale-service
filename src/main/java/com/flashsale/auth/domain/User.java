@@ -57,15 +57,6 @@ public class User {
         return user;
     }
 
-    /** A pending user who registers again replaces the password they could not confirm. */
-    public void replacePendingPassword(String newPasswordHash, Instant now) {
-        if (status != UserStatus.PENDING) {
-            throw new IllegalStateException("Only pending accounts can change password here");
-        }
-        this.passwordHash = newPasswordHash;
-        this.updatedAt = now;
-    }
-
     public boolean isActive() {
         return status == UserStatus.ACTIVE;
     }

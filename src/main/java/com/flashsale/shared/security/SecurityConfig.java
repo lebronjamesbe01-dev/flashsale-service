@@ -54,8 +54,7 @@ public class SecurityConfig {
                                 .authenticated())
                 .oauth2ResourceServer(rs ->
                         rs.jwt(jwt -> jwt.jwtAuthenticationConverter(roleConverter()))
-                                .authenticationEntryPoint(problems.entryPoint())
-                                .accessDeniedHandler(problems.accessDeniedHandler()))
+                                .authenticationEntryPoint(problems.entryPoint()))
                 .exceptionHandling(e ->
                         e.authenticationEntryPoint(problems.entryPoint())
                                 .accessDeniedHandler(problems.accessDeniedHandler()))
