@@ -1,0 +1,9 @@
+# Demo profile: seeds demo data and exposes the mock-inbox endpoint (/api/v1/demo/otp).
+# docker-compose turns it on so the system can be tested from Postman right after start-up.
+# Never enable it in a real deployment: it creates an admin with a published password.
+spring:
+  flyway:
+    locations: classpath:db/migration,classpath:db/demo
+    # Demo seeds are numbered 9001+. Schema migrations added later (V5, V6...) have lower numbers,
+    # so an existing demo database must accept them out of order.
+    out-of-order: true
