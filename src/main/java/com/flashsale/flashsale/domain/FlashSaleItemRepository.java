@@ -7,8 +7,6 @@ import org.springframework.data.jpa.repository.JpaRepository;
 
 public interface FlashSaleItemRepository extends JpaRepository<FlashSaleItem, UUID> {
 
-    List<FlashSaleItem> findBySlotIdOrderByCreatedAt(UUID slotId);
-
     List<FlashSaleItem> findBySlotIdIn(Collection<UUID> slotIds);
 
     boolean existsBySlotIdAndProductId(UUID slotId, UUID productId);

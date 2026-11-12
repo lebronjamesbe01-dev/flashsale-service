@@ -38,8 +38,9 @@ public class FlashSaleQueryService {
     @Transactional(readOnly = true)
     public List<SlotView> schedule(LocalDate day) {
         LocalDate date = day == null ? clock.today() : day;
-        Instant from = date.atStartOfDay(clock.zone()).toInstant();
-        Instant to = date.plusDays(1).atStartOfDay(clock.zone()).toInstant();
-        return assembler.all(slots.findStartingBetween(from, to, EnumSet.of(SlotStatus.PUBLISHED)));
+        BusinessClock.DayRange range = clock.dayRange(date);
+        return assembler.all(
+                slots.findStartingBetween(
+                        range.from(), range.to(), EnumSet.of(SlotStatus.PUBLISHED)));
     }
 }

@@ -11,11 +11,11 @@ import com.flashsale.shared.error.ErrorCode;
 import com.flashsale.shared.time.BusinessClock;
 import java.math.BigDecimal;
 import java.util.Collection;
-import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import java.util.function.Function;
 import java.util.stream.Collectors;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
@@ -47,7 +47,12 @@ public class ProductService {
         if (products.existsBySku(sku)) {
             throw new BusinessException(ErrorCode.SKU_ALREADY_EXISTS);
         }
-        Product product = products.save(Product.create(sku, name, listPrice, clock.now()));
+        Product product;
+        try {
+            product = products.saveAndFlush(Product.create(sku, name, listPrice, clock.now()));
+        } catch (DataIntegrityViolationException duplicate) {
+            throw new BusinessException(ErrorCode.SKU_ALREADY_EXISTS);
+        }
         inventory.initialize(product.id(), initialStock);
         return ProductView.of(product);
     }
@@ -92,8 +97,7 @@ public class ProductService {
 
     @Transactional(readOnly = true)
     public Map<UUID, ProductView> getAll(Collection<UUID> ids) {
-        List<Product> found = products.findAllById(ids);
-        return found.stream()
+        return products.findAllById(ids).stream()
                 .map(ProductView::of)
                 .collect(Collectors.toMap(ProductView::id, Function.identity()));
     }

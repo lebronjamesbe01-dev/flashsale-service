@@ -10,7 +10,6 @@ import com.flashsale.flashsale.domain.FlashSaleSlot;
 import com.flashsale.flashsale.domain.FlashSaleSlotRepository;
 import com.flashsale.flashsale.domain.SlotStatus;
 import com.flashsale.inventory.application.InventoryService;
-import com.flashsale.outbox.application.ProcessedEvents;
 import com.flashsale.shared.error.BusinessException;
 import com.flashsale.shared.error.ErrorCode;
 import com.flashsale.shared.time.BusinessClock;
@@ -39,7 +38,6 @@ public class SlotAdminService {
     private final InventoryService inventory;
     private final SlotViewAssembler assembler;
     private final BusinessClock clock;
-    private final ProcessedEvents processed;
 
     public SlotAdminService(
             FlashSaleSlotRepository slots,
@@ -48,8 +46,7 @@ public class SlotAdminService {
             ProductService products,
             InventoryService inventory,
             SlotViewAssembler assembler,
-            BusinessClock clock,
-            ProcessedEvents processed) {
+            BusinessClock clock) {
         this.slots = slots;
         this.items = items;
         this.itemStore = itemStore;
@@ -57,7 +54,6 @@ public class SlotAdminService {
         this.inventory = inventory;
         this.assembler = assembler;
         this.clock = clock;
-        this.processed = processed;
     }
 
     @Transactional
@@ -99,16 +95,27 @@ public class SlotAdminService {
      */
     @Transactional
     public SlotView close(UUID slotId) {
-        FlashSaleSlot slot = load(slotId);
+        return assembler.one(closeAndGet(slotId));
+    }
+
+    /** Same as {@link #close} without building a view; used by the scheduled closer. */
+    @Transactional
+    public void closeSlot(UUID slotId) {
+        closeAndGet(slotId);
+    }
+
+    /** Takes the slot row lock first so no item can be added to a slot while it is being closed. */
+    private FlashSaleSlot closeAndGet(UUID slotId) {
+        FlashSaleSlot slot = loadForUpdate(slotId);
         if (slot.status() == SlotStatus.CLOSED) {
-            return assembler.one(slot);
+            return slot;
         }
         for (FlashSaleItemStore.ReleasedQuota released :
                 itemStore.freezeSlot(slotId, clock.now())) {
             inventory.release(released.productId(), released.quantity());
         }
         slot.close(clock.now());
-        return assembler.one(slot);
+        return slot;
     }
 
     @Transactional
@@ -122,7 +129,12 @@ public class SlotAdminService {
             throw new BusinessException(ErrorCode.PRODUCT_ALREADY_IN_SLOT);
         }
         inventory.reserve(productId, quota);
-        items.save(FlashSaleItem.create(slotId, productId, salePrice, quota, clock.now()));
+        try {
+            items.saveAndFlush(
+                    FlashSaleItem.create(slotId, productId, salePrice, quota, clock.now()));
+        } catch (DataIntegrityViolationException concurrentDuplicate) {
+            throw new BusinessException(ErrorCode.PRODUCT_ALREADY_IN_SLOT);
+        }
         return assembler.one(slot);
     }
 
@@ -149,30 +161,6 @@ public class SlotAdminService {
         return assembler.one(slot);
     }
 
-    /**
-     * Reaction to {@code product.deactivated}: the product leaves every slot that has not opened
-     * yet and its reserved quota goes back to the warehouse. Slots already open keep selling what
-     * shoppers were promised. Idempotent: a redelivered event is ignored.
-     */
-    @Transactional
-    public void withdrawProduct(UUID eventId, UUID productId) {
-        if (!processed.firstTime("flashsale-products", eventId)) {
-            return;
-        }
-        if (products.get(productId).active()) {
-            return; // reactivated before this event was processed
-        }
-        Instant now = clock.now();
-        for (FlashSaleItem item : items.findByProductId(productId)) {
-            boolean editable =
-                    slots.findById(item.slotId()).map(s -> s.isEditable(now)).orElse(false);
-            if (editable) {
-                inventory.release(item.productId(), item.quota());
-                items.delete(item);
-            }
-        }
-    }
-
     @Transactional(readOnly = true)
     public SlotView get(UUID slotId) {
         return assembler.one(load(slotId));
@@ -180,14 +168,14 @@ public class SlotAdminService {
 
     @Transactional(readOnly = true)
     public List<SlotView> listByDay(LocalDate day) {
-        LocalDate date = day == null ? clock.today() : day;
-        Instant from = date.atStartOfDay(clock.zone()).toInstant();
-        Instant to = date.plusDays(1).atStartOfDay(clock.zone()).toInstant();
-        return assembler.all(slots.findStartingBetween(from, to, EnumSet.allOf(SlotStatus.class)));
+        BusinessClock.DayRange range = clock.dayRange(day == null ? clock.today() : day);
+        return assembler.all(
+                slots.findStartingBetween(
+                        range.from(), range.to(), EnumSet.allOf(SlotStatus.class)));
     }
 
     private FlashSaleSlot editable(UUID slotId) {
-        FlashSaleSlot slot = load(slotId);
+        FlashSaleSlot slot = loadForUpdate(slotId);
         if (!slot.isEditable(clock.now())) {
             throw new BusinessException(ErrorCode.SLOT_NOT_EDITABLE);
         }
@@ -196,6 +184,11 @@ public class SlotAdminService {
 
     private FlashSaleSlot load(UUID slotId) {
         return slots.findById(slotId)
+                .orElseThrow(() -> new BusinessException(ErrorCode.SLOT_NOT_FOUND));
+    }
+
+    private FlashSaleSlot loadForUpdate(UUID slotId) {
+        return slots.findForUpdateById(slotId)
                 .orElseThrow(() -> new BusinessException(ErrorCode.SLOT_NOT_FOUND));
     }
 

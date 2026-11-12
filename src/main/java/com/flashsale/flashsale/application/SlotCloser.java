@@ -11,9 +11,10 @@ import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
 /**
- * Closes published slots once their end time has passed, which returns their unsold quota to the
- * warehouse. Safe on every instance at once: the quota freeze only matches rows that still have
- * unsold units, and the slot's version column makes the second closer back off.
+ * Closes slots (published, or drafts nobody published) once their end time has passed, which
+ * returns their unsold quota to the warehouse. Safe on every instance at once: the quota freeze
+ * only matches rows that still have unsold units, and the slot row lock makes a second closer wait
+ * and then see the slot already closed.
  */
 @Component
 class SlotCloser {
@@ -33,11 +34,14 @@ class SlotCloser {
     @Scheduled(fixedDelayString = "${app.flash-sale.slot-close-interval:60s}", initialDelay = 10000)
     void closeEndedSlots() {
         try {
-            for (UUID slotId : slots.findEndedButPublished(clock.now())) {
+            for (UUID slotId : slots.findEndedNotClosed(clock.now())) {
                 try {
-                    admin.close(slotId);
+                    admin.closeSlot(slotId);
                 } catch (ObjectOptimisticLockingFailureException closedByAnotherInstance) {
                     log.debug("Slot {} closed concurrently", slotId);
+                } catch (RuntimeException e) {
+                    // One bad slot must not starve the others
+                    log.error("Closing slot {} failed", slotId, e);
                 }
             }
         } catch (DataAccessException e) {

@@ -33,7 +33,15 @@ public class BusinessClock {
         return LocalDate.ofInstant(instant, zone);
     }
 
+    /** The half-open instant range [from, to) covered by a business day. */
+    public DayRange dayRange(LocalDate day) {
+        return new DayRange(
+                day.atStartOfDay(zone).toInstant(), day.plusDays(1).atStartOfDay(zone).toInstant());
+    }
+
     public ZoneId zone() {
         return zone;
     }
+
+    public record DayRange(Instant from, Instant to) {}
 }

@@ -14,6 +14,9 @@ import org.springframework.transaction.annotation.Transactional;
 @Service
 public class InventoryService {
 
+    /** Upper bound of on-hand stock; far below INTEGER overflow even after a max adjustment. */
+    static final int MAX_ON_HAND = 1_000_000_000;
+
     private final InventoryRepository inventory;
     private final BusinessClock clock;
 
@@ -54,7 +57,10 @@ public class InventoryService {
 
     @Transactional
     public InventoryView adjust(UUID productId, int delta) {
-        if (inventory.adjustOnHand(productId, delta, clock.now()) == 0) {
+        if (delta == 0) {
+            return view(productId); // nothing to change, no version bump
+        }
+        if (inventory.adjustOnHand(productId, delta, MAX_ON_HAND, clock.now()) == 0) {
             if (!inventory.existsById(productId)) {
                 throw new BusinessException(ErrorCode.PRODUCT_NOT_FOUND);
             }

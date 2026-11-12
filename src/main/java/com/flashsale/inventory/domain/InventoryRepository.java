@@ -41,14 +41,19 @@ public interface InventoryRepository extends JpaRepository<Inventory, UUID> {
     int shipReserved(
             @Param("productId") UUID productId, @Param("qty") int qty, @Param("now") Instant now);
 
-    /** Stock count in/out by an admin; can never drop below what is reserved. */
+    /**
+     * Stock count in/out by an admin; can never drop below what is reserved nor above {@code max}
+     * (which keeps the INTEGER arithmetic from overflowing).
+     */
     @Modifying(flushAutomatically = true)
     @Query(
             "update Inventory i set i.onHand = i.onHand + :delta, i.updatedAt = :now,"
                     + " i.version = i.version + 1"
-                    + " where i.productId = :productId and i.onHand + :delta >= i.reserved")
+                    + " where i.productId = :productId and i.onHand + :delta >= i.reserved"
+                    + " and i.onHand + :delta <= :max")
     int adjustOnHand(
             @Param("productId") UUID productId,
             @Param("delta") int delta,
+            @Param("max") int max,
             @Param("now") Instant now);
 }

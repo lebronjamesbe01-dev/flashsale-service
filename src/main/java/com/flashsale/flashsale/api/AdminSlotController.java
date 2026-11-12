@@ -92,14 +92,16 @@ class AdminSlotController {
 
     @Operation(
             summary = "Add a product to a slot",
-            description = "Reserves the quota from warehouse stock. Allowed until the slot starts.")
+            description =
+                    "Reserves the quota from warehouse stock. Allowed until 10 s before the slot starts.")
     @PostMapping("/{slotId}/items")
     @ResponseStatus(HttpStatus.CREATED)
     SlotView addItem(@PathVariable UUID slotId, @Valid @RequestBody AddItemRequest body) {
         return admin.addItem(slotId, body.productId(), body.salePrice(), body.quota());
     }
 
-    @Operation(summary = "Change sale price or quota of an item (before the slot starts)")
+    @Operation(
+            summary = "Change sale price or quota of an item (until 10 s before the slot starts)")
     @PutMapping("/{slotId}/items/{itemId}")
     SlotView changeItem(
             @PathVariable UUID slotId,
@@ -108,7 +110,9 @@ class AdminSlotController {
         return admin.changeItem(slotId, itemId, body.salePrice(), body.quota());
     }
 
-    @Operation(summary = "Remove an item (before the slot starts); its quota goes back to stock")
+    @Operation(
+            summary =
+                    "Remove an item (until 10 s before the slot starts); its quota goes back to stock")
     @DeleteMapping("/{slotId}/items/{itemId}")
     SlotView removeItem(@PathVariable UUID slotId, @PathVariable UUID itemId) {
         return admin.removeItem(slotId, itemId);

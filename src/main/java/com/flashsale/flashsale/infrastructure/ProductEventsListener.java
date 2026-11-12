@@ -1,30 +1,29 @@
 package com.flashsale.flashsale.infrastructure;
 
-import com.flashsale.flashsale.application.SlotAdminService;
+import com.flashsale.flashsale.application.ProductWithdrawalService;
+import com.flashsale.outbox.application.EventMessageReader;
 import java.util.UUID;
 import org.springframework.amqp.core.Message;
 import org.springframework.amqp.rabbit.annotation.RabbitListener;
 import org.springframework.stereotype.Component;
-import tools.jackson.databind.json.JsonMapper;
 
 /** Consumes {@code product.deactivated}: the product is pulled from slots that have not opened. */
 @Component
 class ProductEventsListener {
 
-    private final SlotAdminService slots;
-    private final JsonMapper json;
+    private final ProductWithdrawalService withdrawals;
+    private final EventMessageReader reader;
 
-    ProductEventsListener(SlotAdminService slots, JsonMapper json) {
-        this.slots = slots;
-        this.json = json;
+    ProductEventsListener(ProductWithdrawalService withdrawals, EventMessageReader reader) {
+        this.withdrawals = withdrawals;
+        this.reader = reader;
     }
 
     @RabbitListener(queues = "flashsale.product-events")
     void onProductDeactivated(Message message) {
-        UUID eventId = UUID.fromString(message.getMessageProperties().getMessageId());
-        ProductDeactivatedMessage event =
-                json.readValue(message.getBody(), ProductDeactivatedMessage.class);
-        slots.withdrawProduct(eventId, event.productId());
+        UUID eventId = reader.eventId(message);
+        ProductDeactivatedMessage event = reader.payload(message, ProductDeactivatedMessage.class);
+        withdrawals.withdrawProduct(eventId, event.productId());
     }
 
     record ProductDeactivatedMessage(UUID productId) {}

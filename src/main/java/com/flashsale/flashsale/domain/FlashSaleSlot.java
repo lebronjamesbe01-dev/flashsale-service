@@ -9,6 +9,7 @@ import jakarta.persistence.Enumerated;
 import jakarta.persistence.Id;
 import jakarta.persistence.Table;
 import jakarta.persistence.Version;
+import java.time.Duration;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.time.ZoneId;
@@ -18,6 +19,8 @@ import java.util.UUID;
 @Entity
 @Table(name = "flash_sale_slots")
 public class FlashSaleSlot {
+
+    static final Duration EDIT_FREEZE_MARGIN = Duration.ofSeconds(10);
 
     @Id private UUID id;
 
@@ -62,7 +65,7 @@ public class FlashSaleSlot {
      * A slot must end after it starts, must not be entirely in the past, and must stay within one
      * business day so that "one flash sale purchase per day" has a single, unambiguous date.
      */
-    public static void validateWindow(Instant startAt, Instant endAt, ZoneId zone, Instant now) {
+    private static void validateWindow(Instant startAt, Instant endAt, ZoneId zone, Instant now) {
         if (!endAt.isAfter(startAt) || !endAt.isAfter(now)) {
             throw new BusinessException(ErrorCode.INVALID_SLOT_TIME);
         }
@@ -92,16 +95,22 @@ public class FlashSaleSlot {
     }
 
     /**
-     * Items and quotas may change while the slot is a draft (invisible to shoppers), or while it is
-     * published but not yet open. Once shoppers can buy, the offer is frozen.
+     * Items and quotas may change while the slot is a draft that has not ended, or while it is
+     * published but more than {@link #EDIT_FREEZE_MARGIN} away from opening. The margin must exceed
+     * the 1 s item cache of the purchase path plus an admin transaction's duration: an edit
+     * committed any later could open with the old price still cached.
      */
     public boolean isEditable(Instant now) {
-        return status == SlotStatus.DRAFT
-                || (status == SlotStatus.PUBLISHED && startAt.isAfter(now));
+        // An expired draft can never be published, so reserving stock for it would only leak.
+        return (status == SlotStatus.DRAFT && endAt.isAfter(now))
+                || (status == SlotStatus.PUBLISHED
+                        && startAt.minus(EDIT_FREEZE_MARGIN).isAfter(now));
     }
 
-    public boolean isOpen(Instant now) {
-        return status == SlotStatus.PUBLISHED && !now.isBefore(startAt) && now.isBefore(endAt);
+    /** True while shoppers cannot buy yet (draft, or published but not started). */
+    public boolean isUpcoming(Instant now) {
+        return status == SlotStatus.DRAFT
+                || (status == SlotStatus.PUBLISHED && startAt.isAfter(now));
     }
 
     public UUID id() {
