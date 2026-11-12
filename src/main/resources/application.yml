@@ -34,11 +34,21 @@ spring:
     # The outbox relay only marks an event sent after the broker confirms it.
     publisher-confirm-type: correlated
     publisher-returns: true
+    template:
+      mandatory: true
     listener:
       simple:
         prefetch: 50
         concurrency: 2
         max-concurrency: 4
+        # Ride out short outages (DB restart, pool exhaustion) before giving up: 1s, 3s, 9s.
+        # After the last attempt the message is rejected and moves to flashsale.dead-letters.
+        retry:
+          enabled: true
+          max-attempts: 4
+          initial-interval: 1s
+          multiplier: 3
+          max-interval: 30s
 
 server:
   port: 8080

@@ -114,7 +114,7 @@ public class SlotAdminService {
     @Transactional
     public SlotView addItem(UUID slotId, UUID productId, BigDecimal salePrice, int quota) {
         FlashSaleSlot slot = editable(slotId);
-        ProductView product = products.get(productId);
+        ProductView product = products.getLocked(productId);
         if (!product.active()) {
             throw new BusinessException(ErrorCode.PRODUCT_INACTIVE);
         }
@@ -158,6 +158,9 @@ public class SlotAdminService {
     public void withdrawProduct(UUID eventId, UUID productId) {
         if (!processed.firstTime("flashsale-products", eventId)) {
             return;
+        }
+        if (products.get(productId).active()) {
+            return; // reactivated before this event was processed
         }
         Instant now = clock.now();
         for (FlashSaleItem item : items.findByProductId(productId)) {

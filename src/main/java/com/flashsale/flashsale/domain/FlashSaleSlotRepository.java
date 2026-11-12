@@ -19,6 +19,11 @@ public interface FlashSaleSlotRepository extends JpaRepository<FlashSaleSlot, UU
     Optional<FlashSaleSlot> findOpenAt(@Param("now") Instant now);
 
     @Query(
+            "select s.id from FlashSaleSlot s where s.status ="
+                    + " com.flashsale.flashsale.domain.SlotStatus.PUBLISHED and s.endAt <= :now")
+    List<UUID> findEndedButPublished(@Param("now") Instant now);
+
+    @Query(
             "select s from FlashSaleSlot s where s.status in :statuses"
                     + " and s.startAt >= :from and s.startAt < :to order by s.startAt")
     List<FlashSaleSlot> findStartingBetween(

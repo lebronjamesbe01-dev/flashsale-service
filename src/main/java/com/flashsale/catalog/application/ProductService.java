@@ -19,6 +19,7 @@ import java.util.stream.Collectors;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 
 @Service
@@ -66,6 +67,17 @@ public class ProductService {
                     new ProductDeactivated(id, product.sku(), clock.now()));
         }
         return ProductView.of(product);
+    }
+
+    /**
+     * Reads the product and holds a share lock on it until the caller's transaction ends, so it
+     * cannot be deactivated half-way through being added to a flash sale.
+     */
+    @Transactional(propagation = Propagation.MANDATORY)
+    public ProductView getLocked(UUID id) {
+        return products.findForShareById(id)
+                .map(ProductView::of)
+                .orElseThrow(() -> new BusinessException(ErrorCode.PRODUCT_NOT_FOUND));
     }
 
     @Transactional(readOnly = true)
