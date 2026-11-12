@@ -14,7 +14,82 @@ Backend cho một chương trình **flash sale**: bán sản phẩm giá rẻ, s
 
 Công nghệ: Java 27, Spring Boot 4.1, PostgreSQL 18, Redis 8, RabbitMQ 4.4, nginx, Docker Compose.
 
-Sơ đồ kiến trúc và đường đi của từng luồng: [docs/system-design.md](docs/system-design.md).
+---
+
+## Toàn cảnh hệ thống
+
+### Các khối và cách chúng nối với nhau
+
+```mermaid
+flowchart LR
+    U["Người mua / Admin<br/>(app, Postman, Swagger)"] -->|"HTTP + JWT"| N["nginx :8088<br/>chia tải"]
+    N --> A1["App instance 1"]
+    N --> A2["App instance 2 … N"]
+
+    A1 & A2 -->|"dữ liệu thật:<br/>đơn, ví, kho, khung giờ"| PG[("PostgreSQL<br/>quyết định đúng / sai")]
+    A1 & A2 -->|"chặn nhanh, OTP,<br/>rate limit, token đã logout"| RD[("Redis<br/>bộ nhớ nhanh dùng chung")]
+    A1 & A2 -->|"gửi sự kiện<br/>(order.placed, …)"| MQ{{"RabbitMQ"}}
+    MQ -->|"nhận sự kiện → trừ kho"| A1 & A2
+```
+
+Mọi instance giống hệt nhau và không giữ dữ liệu riêng, nên muốn chịu tải hơn chỉ cần chạy thêm instance (`--scale app=N`). Mỗi instance làm cả ba việc: phục vụ API, gửi sự kiện từ bảng `outbox` lên RabbitMQ, và nhận sự kiện để cập nhật tồn kho.
+
+### Bên trong một instance
+
+```mermaid
+flowchart TB
+    subgraph SHOPPER["Người mua gọi"]
+        AUTH["auth<br/>đăng ký · OTP · đăng nhập · đăng xuất"]
+        VIEW["flashsale<br/>xem khung giờ và sản phẩm đang sale"]
+        ORD["order<br/>mua hàng"]
+    end
+    subgraph ADMIN["Admin gọi"]
+        CAT["catalog<br/>sản phẩm"]
+        INVA["inventory<br/>nhập kho"]
+        SLOT["flashsale<br/>tạo · publish · đóng khung giờ"]
+        WAL["wallet<br/>nạp tiền ví"]
+    end
+    subgraph BG["Chạy nền (tự động)"]
+        RELAY["outbox relay<br/>gửi sự kiện lên RabbitMQ"]
+        CONS["inventory consumer<br/>nhận sự kiện, trừ kho"]
+        CLOSE["slot closer<br/>đóng khung giờ hết hạn, trả kho"]
+        REC["reconcile<br/>đối chiếu số suất Redis với DB"]
+    end
+    ORD --> VIEW
+    ORD --> WAL
+```
+
+### Một lượt mua đi qua những đâu
+
+```mermaid
+flowchart TD
+    A["An bấm Mua<br/>POST /flash-sale/items/{id}/purchase<br/>+ Idempotency-Key"] --> B{"Cùng key đang xử lý<br/>hoặc đã xong?"}
+    B -->|"đang xử lý"| B1["409 PURCHASE_IN_PROGRESS"]
+    B -->|"đã xong"| B2["Trả lại đúng đơn cũ"]
+    B -->|"lượt mới"| C{"Sản phẩm đang trong<br/>khung giờ mở?<br/>Qua các PurchaseRule?"}
+    C -->|"không"| C1["409 FLASH_SALE_NOT_ACTIVE<br/>403 PURCHASE_NOT_ALLOWED"]
+    C -->|"ok"| D{"Redis (1 script nguyên tử):<br/>còn suất? hôm nay chưa mua?"}
+    D -->|"không"| D1["409 SOLD_OUT / ALREADY_PURCHASED_TODAY<br/>không chạm tới database"]
+    D -->|"ok, giữ tạm 1 suất"| E["PostgreSQL, 1 giao dịch:<br/>tạo đơn · trừ ví · ghi outbox · sold + 1"]
+    E -->|"DB từ chối<br/>(hết hàng thật, thiếu tiền, …)"| E1["Trả suất lại cho Redis<br/>409 kèm lý do"]
+    E -->|"commit"| F["201 Created<br/>đơn hàng + số dư còn lại"]
+    E -.->|"chạy nền, khoảng 200 ms sau"| G["Outbox relay gửi<br/>order.placed lên RabbitMQ"]
+    G -.-> H["Inventory nhận sự kiện<br/>mã đã xử lý thì bỏ qua<br/>on_hand − 1, reserved − 1"]
+```
+
+Redis chỉ để lọc nhanh. Nếu Redis đếm sai hoặc ngừng hẳn, PostgreSQL vẫn chặn bán quá (`sold < quota`) và chặn mua 2 lần trong ngày (unique `user_id, sale_date`). Chi tiết ở [phần 4](#4-hệ-thống-đảm-bảo-đúng-như-thế-nào).
+
+### Một ngày flash sale
+
+```mermaid
+flowchart LR
+    P1["Admin tạo sản phẩm<br/>và nhập kho"] --> P2["Tạo khung giờ (DRAFT)<br/>thêm sản phẩm, giá sale, số suất<br/>→ kho giữ trước số suất"]
+    P2 --> P3["Publish<br/>(sửa được tới 10 s trước giờ mở)"]
+    P3 --> P4["Giờ mở: người mua xem và mua<br/>mỗi người 1 sản phẩm / ngày"]
+    P4 --> P5["Hết giờ: job tự đóng khung giờ<br/>suất chưa bán trả lại kho"]
+```
+
+Sơ đồ chi tiết hơn (bảng dữ liệu, luồng OTP, đăng nhập, RabbitMQ, vòng đời): [docs/system-design.md](docs/system-design.md).
 
 ---
 
