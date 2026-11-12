@@ -27,7 +27,7 @@ docker compose up -d --wait
 ```
 
 - Lần đầu sẽ mất vài phút để build ứng dụng.
-- Lệnh chỉ kết thúc khi mọi thành phần đã sẵn sàng. Ứng dụng chỉ báo "sẵn sàng" khi đã kết nối được cả Postgres, Redis và RabbitMQ, nên khi lệnh chạy xong là gọi API được ngay.
+- Lệnh chỉ kết thúc khi mọi thành phần đã sẵn sàng. Ứng dụng chỉ khởi động sau khi Postgres, Redis và RabbitMQ đã chạy, và chỉ báo "sẵn sàng" khi đã kết nối được database, nên khi lệnh chạy xong là gọi API được ngay. Redis hay RabbitMQ gặp sự cố sau đó thì ứng dụng vẫn báo sẵn sàng và vẫn phục vụ (xem mục 4).
 - Bảng dữ liệu và dữ liệu mẫu được tạo tự động, không cần làm gì thêm.
 
 | Mở ở đâu | Địa chỉ |
@@ -55,10 +55,16 @@ Collection tự lo các bước lặt vặt: tự tạo email mới khi đăng k
 
 | Thư mục | Kịch bản |
 |---|---|
-| 0. Demo accounts | Đăng nhập bằng tài khoản admin và user có sẵn |
-| 1. Auth | Đăng ký → lấy OTP → xác thực → đăng nhập → làm mới token → đăng xuất → token cũ bị từ chối |
-| 2. Flash sale (shopper) | Xem sản phẩm đang sale → mua thành công → gửi lại đúng request đó (nhận lại đơn cũ, không mua thêm) → mua sản phẩm thứ hai trong ngày (bị từ chối) |
-| 3. Admin | Tạo sản phẩm → tạo khung giờ → đưa sản phẩm vào khung giờ (kho tự giữ hàng) → publish → đóng khung giờ (hàng chưa bán trả về kho) |
+| 0. Health & demo accounts | Kiểm tra hệ thống, đăng nhập bằng tài khoản admin và user có sẵn |
+| 1. Auth — email | Đăng ký → lấy OTP → OTP sai bị từ chối → xác thực → đăng nhập → làm mới token → dùng lại refresh token cũ (cả phiên bị huỷ) → đăng xuất → token cũ bị từ chối |
+| 1b. Auth — phone & resend OTP | Đăng ký bằng số điện thoại, gửi lại OTP, đăng nhập bằng số viết kiểu khác (`+84…`, có dấu cách) |
+| 2. Flash sale — shopper | Xem sản phẩm đang sale, lịch trong ngày → thiếu `Idempotency-Key` bị từ chối → mua thành công → gửi lại đúng request đó (nhận lại đơn cũ) → dùng key đó cho sản phẩm khác (422) → mua sản phẩm thứ hai trong ngày (409) |
+| 3. Admin — products | Tạo, xem, liệt kê, sửa sản phẩm; SKU trùng và dữ liệu sai bị từ chối |
+| 4. Admin — inventory | Xem tồn kho, nhập thêm, xuất bớt, xuất quá số lượng bị từ chối |
+| 5. Admin — flash sale slots | Tạo khung giờ nháp → đổi giờ → thêm / sửa / xoá sản phẩm (kho tự giữ và trả hàng) → publish → đóng (hàng chưa bán trả về kho) |
+| 6. Admin — deactivate product | Ngừng bán sản phẩm → không thể đưa vào khung giờ mới |
+| 7. Admin — wallet top-up | Nạp tiền vào ví; gửi lại cùng `Idempotency-Key` không cộng tiền 2 lần; số tiền sai hoặc user không tồn tại bị từ chối |
+| 8. Authorization & errors | Không token (401), user thường gọi API admin (403), id sai định dạng, JSON hỏng, đường dẫn không tồn tại |
 
 ### Dữ liệu có sẵn
 
@@ -84,7 +90,7 @@ Mỗi chức năng chỉ có một API. Trường `identifier` nhận **email ho
 | API | Chức năng |
 |---|---|
 | `POST /api/v1/auth/register` | Đăng ký và gửi OTP |
-| `POST /api/v1/auth/verify-otp` | Nhập OTP để kích hoạt tài khoản |
+| `POST /api/v1/auth/verify-otp` | Nhập OTP **và mật khẩu** để kích hoạt tài khoản. Mật khẩu có hiệu lực là mật khẩu gửi ở bước này |
 | `POST /api/v1/auth/resend-otp` | Gửi lại OTP (tối thiểu cách nhau 60 giây) |
 | `POST /api/v1/auth/login` | Đăng nhập, nhận access token (hiệu lực 15 phút) và refresh token |
 | `POST /api/v1/auth/refresh` | Đổi refresh token lấy cặp token mới |
@@ -108,7 +114,7 @@ Mỗi chức năng chỉ có một API. Trường `identifier` nhận **email ho
 | `/api/v1/admin/products` | Tạo sản phẩm kèm số lượng tồn kho ban đầu, sửa, ngừng bán |
 | `/api/v1/admin/inventory/{productId}` | Xem tồn kho, nhập thêm hoặc xuất bớt hàng |
 | `/api/v1/admin/flash-sale/slots` | Tạo khung giờ, thêm/sửa/xoá sản phẩm trong khung giờ, publish, đóng |
-| `/api/v1/admin/wallets/{userId}/top-up` | Nạp tiền vào ví để test |
+| `/api/v1/admin/wallets/{userId}/top-up` | Nạp tiền vào ví để test. Header `Idempotency-Key` (UUID, không bắt buộc): gửi lại cùng key, cùng user, cùng số tiền thì không cộng thêm; dùng key đó cho user hoặc số tiền khác thì bị từ chối (422) |
 
 Chi tiết từng request/response xem trên Swagger.
 
@@ -159,7 +165,8 @@ Bước "tăng số đã bán" được đặt cuối cùng trong giao dịch. N
 
 | Tình huống | Hệ thống xử lý |
 |---|---|
-| Redis không hoạt động | Bỏ qua bước kiểm tra nhanh, database tự kiểm tra hết. Chậm hơn nhưng vẫn đúng |
+| Redis không hoạt động | Bỏ qua bước kiểm tra nhanh, database tự kiểm tra hết: vẫn đúng, chỉ tốn thêm tải cho database. Lệnh gửi tới Redis bị từ chối ngay khi mất kết nối nên không phải chờ timeout. Riêng danh sách token đã đăng xuất không đọc được, nên token đã đăng xuất vẫn dùng được tới khi hết hạn (tối đa 15 phút). Đã thử tắt Redis thật: đăng nhập, xem sale, mua (201), mua lần hai (409) đều phản hồi trong khoảng 5–20 ms; bật lại Redis thì tự phục hồi |
+| RabbitMQ không hoạt động | Mua hàng vẫn bình thường. Sự kiện nằm chờ trong bảng `outbox` (cùng giao dịch với đơn) và được gửi khi RabbitMQ chạy lại, nên tồn kho chỉ cập nhật trễ chứ không mất |
 | Server tắt đột ngột giữa lúc đang mua | Dấu "đã mua hôm nay" chỉ giữ 60 giây nếu đơn chưa hoàn tất, nên người mua không bị chặn oan. Một job chạy mỗi phút đối chiếu lại số suất trong Redis với database |
 | Gửi lại request mua với cùng `Idempotency-Key` | Trả lại đúng đơn đã tạo, không mua thêm |
 | Dùng lại `Idempotency-Key` cũ để mua sản phẩm khác | Từ chối (lỗi 422) |
@@ -186,13 +193,15 @@ Tin nhắn có thể bị gửi trùng (ví dụ mạng chập chờn). Mỗi s�
 | Khung giờ kết thúc (tự động) hoặc admin đóng sớm | Hàng chưa bán được trả lại (`reserved` giảm) |
 | Admin ngừng bán sản phẩm | Sản phẩm tự rời các khung giờ chưa diễn ra, hàng giữ chỗ được trả lại |
 
-Nếu phần tồn kho gặp lỗi khi xử lý, ví dụ database đang khởi động lại, hệ thống tự thử lại sau 1, 3 rồi 9 giây. Vẫn lỗi thì tin nhắn được chuyển sang hàng đợi `flashsale.dead-letters` để xem và xử lý lại bằng giao diện RabbitMQ.
+Nếu phần tồn kho gặp lỗi khi xử lý, ví dụ database đang khởi động lại, hệ thống tự thử lại sau 1, 3 rồi 9 giây. Vẫn lỗi thì tin nhắn được chuyển sang hàng đợi `flashsale.dead-letters` để xem và xử lý lại bằng giao diện RabbitMQ. Tin nhắn hỏng (thiếu mã sự kiện, JSON sai) không thử lại mà chuyển thẳng sang `flashsale.dead-letters`.
+
+Nếu RabbitMQ từ chối một sự kiện, sự kiện đó được gửi lại sau 1, 2, 4… giây (tối đa 5 phút một lần) thay vì liên tục, nên không chặn các sự kiện khác. Gửi lỗi quá 20 lần thì ghi log lỗi để người vận hành kiểm tra.
 
 ### Bảo mật
 
 - Mật khẩu được mã hoá một chiều (BCrypt). OTP không lưu dạng gốc, hết hạn sau 5 phút, nhập sai 5 lần thì bị huỷ.
 - **Không để lộ ai đã có tài khoản:** đăng ký luôn trả cùng một câu trả lời; đăng nhập sai mật khẩu hay email không tồn tại đều nhận cùng một lỗi, với thời gian phản hồi như nhau.
-- Khi mã OTP còn hiệu lực, người khác đăng ký lại cùng email cũng không đổi được mật khẩu.
+- Mật khẩu được đặt lúc nhập OTP, không phải lúc đăng ký. Người khác đăng ký trước bằng email của bạn cũng không chiếm được tài khoản, vì chỉ người đọc được OTP mới đặt được mật khẩu.
 - Đăng xuất làm token hết hiệu lực ngay lập tức. Refresh token chỉ dùng được một lần; nếu token cũ bị dùng lại (dấu hiệu bị đánh cắp), toàn bộ phiên đăng nhập đó bị huỷ.
 - Giới hạn số lần gọi (rate limit) cho đăng ký, OTP, đăng nhập và mua hàng.
 - Database, Redis, RabbitMQ không mở ra ngoài máy; khoá bí mật không ghi cứng trong code.
@@ -216,6 +225,11 @@ Những gì test chứng minh:
 - Một sự kiện tồn kho bị gửi 3 lần → kho chỉ giảm 1 lần.
 - Ngừng bán sản phẩm → sản phẩm tự rời các khung giờ chưa diễn ra, hàng trả về kho.
 - Toàn bộ luồng tài khoản, chống dò tài khoản, đăng xuất, làm mới token.
+- Kẻ xấu đăng ký trước bằng email của người khác cũng không chiếm được tài khoản (mật khẩu đặt lúc nhập OTP).
+- Khung giờ hết hạn (kể cả bản nháp) tự đóng và trả hàng về kho, một khung giờ lỗi không chặn các khung giờ khác.
+- Sự kiện gửi lỗi được thử lại thưa dần, tin nhắn hỏng vào thẳng hàng đợi lỗi; nạp tiền gửi lại cùng key không cộng 2 lần.
+- Thêm một điều kiện mua mới chỉ cần thêm một class `PurchaseRule` (có test minh hoạ).
+- Tham số sai định dạng trả 400, database quá tải trả 503, không lộ lỗi 500.
 
 ### Đo tải (k6)
 
@@ -235,8 +249,10 @@ Kết quả trên Apple M4 Max (Docker 14 CPU, 8 GB RAM), 2 instance ứng dụn
 
 | Tải | Thời gian | 95% request phản hồi trong | Lỗi server | Sai lệch dữ liệu |
 |---|---|---|---|---|
-| 600 request/giây | 60 giây | 2,9 ms | 0 | 0 |
-| 2.000 request/giây | 30 giây | 1,3 ms | 0 | 0 |
+| 600 request/giây | 60 giây | 3,7 ms | 0 | 0 |
+| 2.000 request/giây | 30 giây | 1,9 ms | 0 | 0 |
+
+Cả hai lần đo, k6 chạy đủ 100% lượt theo tốc độ yêu cầu (36.000 và 60.000 lượt, không lượt nào bị bỏ).
 
 Báo cáo k6 có dòng `http_req_failed` khoảng 40%. Đó là các phản hồi "hết hàng" hoặc "đã mua hôm nay" (mã 409). k6 mặc định coi mọi mã từ 400 trở lên là lỗi, nhưng trong flash sale đây là câu trả lời đúng. Script chỉ tính lỗi server (5xx) và timeout là lỗi thật.
 
@@ -246,7 +262,7 @@ Báo cáo k6 có dòng `http_req_failed` khoảng 40%. Đó là các phản hồ
 
 - Ngày được tính theo giờ Việt Nam. Một khung giờ không được kéo qua nửa đêm, nên mỗi lượt mua thuộc về đúng một ngày.
 - "Mỗi người 1 sản phẩm flash sale mỗi ngày" áp dụng chung cho tất cả khung giờ và tất cả sản phẩm trong ngày.
-- Các khung giờ đã publish không được trùng thời gian nhau. Sản phẩm trong một khung giờ chỉ sửa được trước khi khung giờ bắt đầu.
+- Các khung giờ đã publish không được trùng thời gian nhau. Sản phẩm trong một khung giờ chỉ sửa được tới 10 giây trước khi khung giờ bắt đầu (để giá đang được cache 1 giây ở luồng mua không bị cũ). Khung giờ nháp đã hết giờ không sửa được nữa và được job tự đóng, trả hàng giữ chỗ về kho.
 - Đăng nhập bằng email/số điện thoại và mật khẩu; OTP dùng để xác nhận email/số điện thoại khi đăng ký.
 - Người dùng đã có sẵn tiền trong ví (theo đề bài); admin có API nạp tiền để test.
 - Đơn hàng được thanh toán ngay bằng tiền trong ví; chưa có chức năng huỷ hoặc hoàn đơn.
@@ -258,7 +274,7 @@ Báo cáo k6 có dòng `http_req_failed` khoảng 40%. Đó là các phản hồ
 - **Huỷ / hoàn đơn:** thêm sự kiện "huỷ đơn" để trả hàng về kho và hoàn tiền vào ví.
 - **Gửi OTP thật:** thêm một tiến trình đọc bảng `notification_outbox` và gọi dịch vụ email/SMS.
 - **Báo cáo doanh thu, tốc độ bán hết:** đẩy sự kiện sang một kho dữ liệu riêng cho thống kê (ví dụ ClickHouse), không làm nặng database chính.
-- **Thêm điều kiện mua** (theo hạng thành viên, theo khu vực…): thêm bước kiểm tra trước khi mua; cấu hình đã nằm trong database.
+- **Thêm điều kiện mua** (theo hạng thành viên, theo khu vực…): viết một class implement `PurchaseRule` (`order/application/PurchaseRule.java`). Mọi rule được kiểm tra sau khi xác nhận sản phẩm đang sale và trước khi giữ suất, nên không cần sửa luồng mua. Cấu hình của rule (ví dụ hạng tối thiểu) để trong database như phần còn lại của flash sale.
 - **Đổi RabbitMQ sang Kafka** nếu cần đọc lại lịch sử sự kiện hoặc lượng sự kiện rất lớn: chỉ phải viết lại phần gửi/nhận tin, logic nghiệp vụ giữ nguyên.
 
 ## 8. Cấu trúc mã nguồn

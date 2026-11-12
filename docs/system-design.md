@@ -26,8 +26,8 @@ flowchart LR
     A2 --> RD
     A1 -- "outbox relay" --> MQ
     A2 -- "outbox relay" --> MQ
-    MQ -- "queue inventory.events" --> A1
-    MQ -- "queue inventory.events" --> A2
+    MQ -- "queue inventory.order-events<br/>flashsale.product-events" --> A1
+    MQ -- "queue inventory.order-events<br/>flashsale.product-events" --> A2
     MQ -.->|"mở rộng sau"| CH[("ClickHouse<br/>báo cáo")]
 ```
 
@@ -92,7 +92,7 @@ erDiagram
         varchar identifier UK "email hoặc phone E.164"
         varchar identifier_type "EMAIL | PHONE"
         varchar password_hash "BCrypt"
-        varchar status "PENDING | ACTIVE | LOCKED"
+        varchar status "PENDING | ACTIVE | LOCKED (chưa có API khoá)"
         varchar role "USER | ADMIN"
     }
     WALLETS {
@@ -154,7 +154,7 @@ erDiagram
     }
 ```
 
-Bảng hạ tầng: `outbox` (sự kiện chờ gửi), `processed_events` (sự kiện đã xử lý, chống trùng), `notification_outbox` (mock gửi OTP), `refresh_tokens` (hash refresh token).
+Bảng hạ tầng: `outbox` (sự kiện chờ gửi; gửi lỗi thì lùi lịch theo `next_attempt_at`, tối đa 5 phút/lần), `processed_events` (sự kiện đã xử lý, chống trùng), `notification_outbox` (mock gửi OTP), `refresh_tokens` (hash refresh token).
 
 **Ràng buộc cứng — tuyến phòng thủ cuối cùng**
 
@@ -202,18 +202,19 @@ sequenceDiagram
     API->>S: register()
     S->>DB: Tìm user theo identifier
     alt Đã ACTIVE, hoặc PENDING mà OTP cũ còn hiệu lực
-        S-->>API: Không làm gì (không lộ là đã tồn tại, không cho đổi mật khẩu)
+        S-->>API: Không làm gì (không lộ là đã tồn tại; mật khẩu cũ giữ nguyên)
     else Mới, hoặc PENDING và OTP cũ đã hết hạn
-        S->>DB: INSERT user PENDING ON CONFLICT DO NOTHING (BCrypt)
+        S->>DB: INSERT user PENDING ON CONFLICT DO NOTHING (chỉ khi user mới)
         S->>R: Lưu HMAC(OTP), attempts=0, TTL 5 phút
         S->>DB: Ghi notification_outbox (mock gửi, log OTP ở profile dev)
     end
     API-->>U: 202 "Nếu thông tin hợp lệ, OTP đã được gửi"
 
-    U->>API: POST /auth/verify-otp {identifier, otp}
+    U->>API: POST /auth/verify-otp {identifier, otp, password}
     API->>R: Lấy OTP, so sánh constant-time
     alt Đúng
-        API->>DB: status = ACTIVE (chỉ khi đang PENDING), mở ví số dư 0
+        API->>DB: status = ACTIVE + password_hash = BCrypt(password)<br/>(chỉ khi đang PENDING), mở ví số dư 0
+        Note over API,DB: Mật khẩu đặt ở bước này: chỉ người đọc được OTP mới đặt được,<br/>nên đăng ký trước bằng identifier của người khác không chiếm được tài khoản
         API->>R: Xoá OTP
         API-->>U: 200 Đã kích hoạt
     else Sai
@@ -273,6 +274,7 @@ sequenceDiagram
     C->>P: purchase(user, item, abc)
     P->>R: SET NX purchase:lock:{user}:abc (30s)
     P->>P: Item đang trong khung giờ? (cache 1s)
+    P->>P: Các PurchaseRule (điều kiện mua mở rộng, mặc định không có)
     P->>R: Lua admit(item, user, ngày)
     Note over R: Nguyên tử: đã mua hôm nay? còn suất?<br/>nếu ổn: DECR stock, SET cờ đã mua (60s)
     R-->>P: ADMITTED
@@ -331,7 +333,8 @@ flowchart LR
 | Sự cố | Hệ quả | Xử lý |
 |---|---|---|
 | Instance chết sau khi Redis cho qua, trước khi commit | Redis thiếu 1 suất; user có cờ "đã mua" nhưng không có đơn | Cờ chỉ sống 60s nếu chưa commit. `StockReconciler` (60s/lần, mọi instance) ghi đè `fs:stock = quota - sold` |
-| Redis chết | Không có cổng chặn | Bỏ qua khoá, cổng và rate limit; DB tự quyết. Chậm hơn nhưng vẫn đúng |
+| Redis chết | Không có cổng chặn, không đọc được token denylist | Lettuce từ chối lệnh ngay khi mất kết nối (không chờ timeout); bỏ qua khoá, cổng, rate limit và denylist (fail open); DB tự quyết, vẫn đúng. Token đã logout còn dùng được tới khi hết hạn (≤ 15 phút). Readiness chỉ kiểm DB nên instance không bị gỡ khỏi load balancer |
+| RabbitMQ chết | Sự kiện chưa gửi được | Đơn vẫn tạo; sự kiện chờ trong `outbox`, relay gửi lại khi broker sống lại; tồn kho cập nhật trễ, không mất |
 | Redis đếm cao hơn thực tế | Thêm request vào tới DB | DB từ chối, counter Redis được đặt về 0 ngay |
 | Bấm mua 2 lần / client retry | 2 request cùng key | Khoá Redis + unique `(user_id, idempotency_key)`; lần sau nhận lại đơn cũ |
 | DB quá tải | Hết kết nối trong 3s | 503 + `Retry-After: 1` thay vì 500 |
@@ -381,12 +384,14 @@ flowchart LR
     EX -- "product.deactivated" --> Q2["flashsale.product-events<br/>(quorum)"]
     Q1 --> L1["Inventory consumer"]
     Q2 --> L2["Flash sale consumer"]
-    Q1 -- "hết lượt thử" --> DLX{{"flashsale.dlx"}}
-    Q2 -- "hết lượt thử" --> DLX
+    Q1 -- "hết lượt thử / tin hỏng" --> DLX{{"flashsale.dlx"}}
+    Q2 -- "hết lượt thử / tin hỏng" --> DLX
     DLX --> DLQ["flashsale.dead-letters"]
 ```
 
-Consumer lỗi được thử lại trong ứng dụng sau 1s, 3s, 9s (đủ để qua một lần DB khởi động lại); vẫn lỗi thì tin bị từ chối và chuyển sang `flashsale.dead-letters` để xem và chuyển lại thủ công.
+Consumer lỗi được thử lại trong ứng dụng sau 1s, 3s, 9s (đủ để qua một lần DB khởi động lại); vẫn lỗi thì tin bị từ chối và chuyển sang `flashsale.dead-letters` để xem và chuyển lại thủ công. Tin hỏng (thiếu `message_id`, JSON sai) bị từ chối ngay, không thử lại.
+
+Phía gửi: sự kiện bị broker nack hoặc không route được không chặn cả lô; `attempts + 1`, `next_attempt_at = now + min(2^attempts, 300) s`, relay chỉ lấy dòng đã tới hạn. Quá 20 lần thì log ERROR một lần (vẫn giữ dòng để xử lý tay).
 
 ### 8.3 Sự kiện và tác động
 
@@ -412,7 +417,7 @@ stateDiagram-v2
         [*] --> DRAFT: admin tạo
         DRAFT --> PUBLISHED: publish (không được chồng giờ slot khác)
         PUBLISHED --> CLOSED: hết giờ (job tự đóng) / admin đóng, trả kho phần chưa bán
-        DRAFT --> CLOSED: admin huỷ bản nháp
+        DRAFT --> CLOSED: admin huỷ bản nháp / job tự đóng khi bản nháp đã hết giờ (trả kho)
         CLOSED --> [*]
     }
 ```
@@ -423,8 +428,7 @@ stateDiagram-v2
     state "Tài khoản" as ACC {
         [*] --> PENDING: register
         PENDING --> ACTIVE: verify OTP đúng
-        ACTIVE --> LOCKED: admin khoá
-        LOCKED --> ACTIVE: admin mở
+        ACTIVE --> LOCKED: khoá tay trong DB (chưa có API)
     }
 ```
 
@@ -435,7 +439,7 @@ stateDiagram-v2
 ```mermaid
 flowchart LR
     subgraph COMPOSE["docker compose up"]
-        NG["nginx :8080"] --> APP["app ×N<br/>(--scale app=2)"]
+        NG["nginx :8088"] --> APP["app ×N<br/>(--scale app=2)"]
         APP --> PG[("postgres:18.6")]
         APP --> RD[("redis:8.8")]
         APP --> MQ{{"rabbitmq:4.4<br/>UI :15672"}}
@@ -443,4 +447,4 @@ flowchart LR
     K6["k6 (docker)"] -.->|"load test"| NG
 ```
 
-Flyway tự tạo bảng + seed dữ liệu dev (admin, user test có tiền, sản phẩm, khung giờ trong ngày) khi app khởi động.
+Flyway tự tạo bảng + seed dữ liệu dev (admin, user test có tiền, sản phẩm, khung giờ mỗi 2 tiếng trong 7 ngày) khi app khởi động (chỉ ở profile demo).
