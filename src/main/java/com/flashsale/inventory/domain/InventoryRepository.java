@@ -32,6 +32,15 @@ public interface InventoryRepository extends JpaRepository<Inventory, UUID> {
     int release(
             @Param("productId") UUID productId, @Param("qty") int qty, @Param("now") Instant now);
 
+    /** Sold flash sale units leave the warehouse: they stop being reserved and on hand. */
+    @Modifying(flushAutomatically = true)
+    @Query(
+            "update Inventory i set i.onHand = i.onHand - :qty, i.reserved = i.reserved - :qty,"
+                    + " i.updatedAt = :now, i.version = i.version + 1"
+                    + " where i.productId = :productId and i.reserved >= :qty and i.onHand >= :qty")
+    int shipReserved(
+            @Param("productId") UUID productId, @Param("qty") int qty, @Param("now") Instant now);
+
     /** Stock count in/out by an admin; can never drop below what is reserved. */
     @Modifying(flushAutomatically = true)
     @Query(

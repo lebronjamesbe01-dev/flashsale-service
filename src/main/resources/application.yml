@@ -31,6 +31,14 @@ spring:
     port: ${RABBITMQ_PORT:15673}
     username: ${RABBITMQ_USER:flashsale}
     password: ${RABBITMQ_PASSWORD:flashsale}
+    # The outbox relay only marks an event sent after the broker confirms it.
+    publisher-confirm-type: correlated
+    publisher-returns: true
+    listener:
+      simple:
+        prefetch: 50
+        concurrency: 2
+        max-concurrency: 4
 
 server:
   port: 8080

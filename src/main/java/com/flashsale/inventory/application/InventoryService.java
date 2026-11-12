@@ -44,6 +44,14 @@ public class InventoryService {
         }
     }
 
+    /** A flash sale unit was sold: it leaves the warehouse and is no longer reserved. */
+    @Transactional(propagation = Propagation.MANDATORY)
+    public void shipSoldUnit(UUID productId) {
+        if (inventory.shipReserved(productId, 1, clock.now()) == 0) {
+            throw new IllegalStateException("No reserved stock to ship for product " + productId);
+        }
+    }
+
     @Transactional
     public InventoryView adjust(UUID productId, int delta) {
         if (inventory.adjustOnHand(productId, delta, clock.now()) == 0) {

@@ -4,6 +4,8 @@ import com.flashsale.catalog.domain.Product;
 import com.flashsale.catalog.domain.ProductRepository;
 import com.flashsale.catalog.domain.ProductStatus;
 import com.flashsale.inventory.application.InventoryService;
+import com.flashsale.outbox.application.Events;
+import com.flashsale.outbox.application.OutboxWriter;
 import com.flashsale.shared.error.BusinessException;
 import com.flashsale.shared.error.ErrorCode;
 import com.flashsale.shared.time.BusinessClock;
@@ -25,12 +27,17 @@ public class ProductService {
     private final ProductRepository products;
     private final InventoryService inventory;
     private final BusinessClock clock;
+    private final OutboxWriter outbox;
 
     public ProductService(
-            ProductRepository products, InventoryService inventory, BusinessClock clock) {
+            ProductRepository products,
+            InventoryService inventory,
+            BusinessClock clock,
+            OutboxWriter outbox) {
         this.products = products;
         this.inventory = inventory;
         this.clock = clock;
+        this.outbox = outbox;
     }
 
     /** Creates the product and its warehouse stock row in one transaction. */
@@ -47,7 +54,17 @@ public class ProductService {
     @Transactional
     public ProductView update(UUID id, String name, BigDecimal listPrice, ProductStatus status) {
         Product product = load(id);
+        boolean deactivating = product.isActive() && status == ProductStatus.INACTIVE;
         product.update(name, listPrice, status, clock.now());
+        if (deactivating) {
+            // Upcoming flash sales of this product are withdrawn asynchronously by the flash sale
+            // module, which also returns their reserved stock to the warehouse.
+            outbox.write(
+                    "product",
+                    id,
+                    Events.PRODUCT_DEACTIVATED,
+                    new ProductDeactivated(id, product.sku(), clock.now()));
+        }
         return ProductView.of(product);
     }
 
