@@ -1,7 +1,6 @@
 package com.flashsale.outbox.infrastructure;
 
 import com.flashsale.outbox.application.Events;
-import org.springframework.amqp.core.Binding;
 import org.springframework.amqp.core.BindingBuilder;
 import org.springframework.amqp.core.Declarables;
 import org.springframework.amqp.core.FanoutExchange;
@@ -18,11 +17,14 @@ import org.springframework.context.annotation.Configuration;
  * flashsale.events (topic)
  *   order.placed        → inventory.order-events    (warehouse stock)
  *   product.deactivated → flashsale.product-events  (pull product from upcoming slots)
- * flashsale.dlx (fanout) → flashsale.dead-letters   (messages that failed 5 times)
+ * flashsale.dlx (fanout) → flashsale.dead-letters   (messages the consumers gave up on)
  * </pre>
  *
- * Quorum queues survive broker restarts and count deliveries: after 5 failed attempts a message
- * moves to the dead-letter queue instead of blocking the queue forever.
+ * Quorum queues survive broker restarts. A listener that keeps failing is retried in-process (see
+ * {@code spring.rabbitmq.listener.simple.retry}), then rejects the message without requeue and the
+ * broker dead-letters it on that first delivery. The delivery limit is the safety net for
+ * redeliveries (consumer crash, dropped connection): after {@value #DELIVERY_LIMIT} deliveries the
+ * message is dead-lettered instead of looping forever.
  */
 @Configuration(proxyBeanMethods = false)
 class RabbitTopologyConfig {
@@ -45,7 +47,7 @@ class RabbitTopologyConfig {
                 dlq,
                 BindingBuilder.bind(inventory).to(events).with(Events.ORDER_PLACED),
                 BindingBuilder.bind(products).to(events).with(Events.PRODUCT_DEACTIVATED),
-                bind(dlq, deadLetters));
+                BindingBuilder.bind(dlq).to(deadLetters));
     }
 
     private static Queue quorum(String name) {
@@ -54,9 +56,5 @@ class RabbitTopologyConfig {
                 .deliveryLimit(DELIVERY_LIMIT)
                 .deadLetterExchange(DLX)
                 .build();
-    }
-
-    private static Binding bind(Queue queue, FanoutExchange exchange) {
-        return BindingBuilder.bind(queue).to(exchange);
     }
 }

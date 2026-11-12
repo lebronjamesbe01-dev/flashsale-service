@@ -3,6 +3,8 @@ package com.flashsale.wallet.domain;
 import com.flashsale.shared.persistence.AssignedIdEntity;
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
+import jakarta.persistence.EnumType;
+import jakarta.persistence.Enumerated;
 import jakarta.persistence.Id;
 import jakarta.persistence.Table;
 import java.math.BigDecimal;
@@ -19,8 +21,9 @@ public class WalletTransaction extends AssignedIdEntity {
     @Column(name = "user_id", nullable = false)
     private UUID userId;
 
+    @Enumerated(EnumType.STRING)
     @Column(nullable = false)
-    private String type;
+    private WalletTransactionType type;
 
     @Column(nullable = false)
     private BigDecimal amount;
@@ -38,7 +41,7 @@ public class WalletTransaction extends AssignedIdEntity {
 
     public static WalletTransaction record(
             UUID userId,
-            String type,
+            WalletTransactionType type,
             BigDecimal amount,
             BigDecimal balanceAfter,
             UUID refId,
@@ -57,5 +60,10 @@ public class WalletTransaction extends AssignedIdEntity {
     @Override
     public UUID getId() {
         return id;
+    }
+
+    /** True if this ledger line is the same operation: same wallet and same amount. */
+    public boolean matches(UUID otherUserId, BigDecimal otherAmount) {
+        return userId.equals(otherUserId) && amount.compareTo(otherAmount) == 0;
     }
 }

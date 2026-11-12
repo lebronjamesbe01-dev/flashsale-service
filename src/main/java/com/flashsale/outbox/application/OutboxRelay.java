@@ -28,6 +28,8 @@ class OutboxRelay {
 
     private static final Logger log = LoggerFactory.getLogger(OutboxRelay.class);
     private static final int BATCH = 100;
+    private static final int PARK_AFTER_ATTEMPTS = 20;
+    private static final int TX_TIMEOUT_SECONDS = 30;
 
     private final OutboxStore store;
     private final EventPublisher publisher;
@@ -43,23 +45,27 @@ class OutboxRelay {
         this.publisher = publisher;
         this.clock = clock;
         this.transaction = new TransactionTemplate(transactionManager);
+        // A blocked broker connection must not hang the relay (and hold row locks) forever.
+        this.transaction.setTimeout(TX_TIMEOUT_SECONDS);
     }
 
     @Scheduled(fixedDelayString = "${app.outbox.relay-interval:200ms}")
     void relay() {
-        Integer published;
+        Integer handled;
         do {
-            published = transaction.execute(tx -> relayBatch());
-        } while (published != null && published == BATCH);
+            handled = transaction.execute(tx -> relayBatch());
+        } while (handled != null && handled == BATCH);
     }
 
     /**
-     * Returns how many events of the batch were stored by the broker. An event the broker rejects
-     * (nack or unroutable) does not hold the others back; it is retried on later runs and its
-     * {@code attempts} counter grows. Consumers do not depend on event order.
+     * Returns the size of the batch it handled, 0 if the broker is unavailable. An event the broker
+     * rejects (nack or unroutable) does not hold the others back: it backs off (see {@link
+     * OutboxStore#markFailed}) and drops out of the next batches, so the loop keeps draining.
+     * Consumers do not depend on event order.
      */
     private int relayBatch() {
-        List<OutboxMessage> batch = store.lockBatch(BATCH);
+        var now = clock.now();
+        List<OutboxMessage> batch = store.lockBatch(BATCH, now);
         if (batch.isEmpty()) {
             return 0;
         }
@@ -70,14 +76,20 @@ class OutboxRelay {
             log.warn("Outbox relay paused, broker unavailable: {}", brokerDown.getMessage());
             return 0;
         }
-        for (OutboxMessage message : batch) {
-            if (confirmed.contains(message.id())) {
-                store.markPublished(message.id(), clock.now());
-            } else {
-                store.markFailed(message.id());
-            }
+        store.markPublished(confirmed, now);
+        List<UUID> failed =
+                batch.stream()
+                        .map(OutboxMessage::id)
+                        .filter(id -> !confirmed.contains(id))
+                        .toList();
+        for (UUID parked : store.markFailed(failed, now, PARK_AFTER_ATTEMPTS)) {
+            log.error(
+                    "Outbox event {} failed {} times, parked: still retried every 5 minutes, needs"
+                            + " manual inspection (missing binding or bad routing key?)",
+                    parked,
+                    PARK_AFTER_ATTEMPTS);
         }
-        return confirmed.size() == batch.size() ? batch.size() : 0;
+        return batch.size();
     }
 
     /** Published events are only kept for troubleshooting. */
