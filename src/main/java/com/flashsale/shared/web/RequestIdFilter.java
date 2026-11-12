@@ -28,6 +28,11 @@ public class RequestIdFilter extends OncePerRequestFilter {
     private static final String ATTRIBUTE = RequestIdFilter.class.getName() + ".id";
     private static final Pattern SAFE_ID = Pattern.compile("[A-Za-z0-9._-]{1,64}");
 
+    /** The id of the request being handled on this thread, or null outside a request. */
+    public static String current() {
+        return MDC.get(MDC_KEY);
+    }
+
     @Override
     protected boolean shouldNotFilterErrorDispatch() {
         return false;

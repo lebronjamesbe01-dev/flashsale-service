@@ -2,7 +2,6 @@ package com.flashsale.shared.error;
 
 import com.flashsale.shared.web.RequestIdFilter;
 import java.util.Map;
-import org.slf4j.MDC;
 import org.springframework.boot.web.error.ErrorAttributeOptions;
 import org.springframework.boot.webmvc.error.DefaultErrorAttributes;
 import org.springframework.stereotype.Component;
@@ -23,7 +22,7 @@ public class ProblemErrorAttributes extends DefaultErrorAttributes {
         if (attributes.get("status") instanceof Integer status) {
             attributes.put("code", ErrorCode.fromStatus(status).name());
         }
-        String requestId = MDC.get(RequestIdFilter.MDC_KEY);
+        String requestId = RequestIdFilter.current();
         if (requestId != null) {
             attributes.put("requestId", requestId);
         }

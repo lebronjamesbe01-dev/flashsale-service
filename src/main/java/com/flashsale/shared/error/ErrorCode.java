@@ -45,6 +45,8 @@ public enum ErrorCode {
     ALREADY_PURCHASED_TODAY(
             HttpStatus.CONFLICT, "You have already bought a flash sale product today"),
     INSUFFICIENT_BALANCE(HttpStatus.CONFLICT, "Wallet balance is not enough"),
+    PURCHASE_NOT_ALLOWED(
+            HttpStatus.FORBIDDEN, "You do not meet the conditions to buy this flash sale item"),
     PURCHASE_IN_PROGRESS(
             HttpStatus.CONFLICT, "A purchase with this Idempotency-Key is still being processed"),
     IDEMPOTENCY_KEY_REUSED(

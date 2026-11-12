@@ -66,8 +66,11 @@ management:
         enabled: true
       show-details: never
       group:
+        # Only the database is required to serve traffic. Redis and RabbitMQ have fallbacks
+        # (fail open / outbox buffering), so their outage must not pull every instance out of the
+        # load balancer. Start-up order is handled by docker compose depends_on.
         readiness:
-          include: readinessState,db,redis,rabbit
+          include: readinessState,db
 
 springdoc:
   swagger-ui:

@@ -3,7 +3,6 @@ package com.flashsale.shared.error;
 import com.flashsale.shared.web.RequestIdFilter;
 import java.net.URI;
 import java.util.Map;
-import org.slf4j.MDC;
 import org.springframework.http.ProblemDetail;
 
 /**
@@ -19,7 +18,7 @@ public final class ProblemFactory {
         problem.setType(URI.create("urn:flashsale:error:" + code.name().toLowerCase()));
         problem.setTitle(code.status().getReasonPhrase());
         problem.setProperty("code", code.name());
-        String requestId = MDC.get(RequestIdFilter.MDC_KEY);
+        String requestId = RequestIdFilter.current();
         if (requestId != null) {
             problem.setProperty("requestId", requestId);
         }
