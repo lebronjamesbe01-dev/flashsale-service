@@ -29,6 +29,17 @@ public interface WalletRepository extends JpaRepository<Wallet, UUID> {
             @Param("amount") BigDecimal amount,
             @Param("now") Instant now);
 
+    /** Never lets the balance go negative: 0 rows means not enough money (or no wallet). */
+    @Modifying(flushAutomatically = true)
+    @Query(
+            "update Wallet w set w.balance = w.balance - :amount, w.updatedAt = :now,"
+                    + " w.version = w.version + 1"
+                    + " where w.userId = :userId and w.balance >= :amount")
+    int debit(
+            @Param("userId") UUID userId,
+            @Param("amount") BigDecimal amount,
+            @Param("now") Instant now);
+
     @Query("select w.balance from Wallet w where w.userId = :userId")
     Optional<BigDecimal> findBalance(@Param("userId") UUID userId);
 }

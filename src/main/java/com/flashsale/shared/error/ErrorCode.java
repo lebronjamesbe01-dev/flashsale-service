@@ -40,6 +40,20 @@ public enum ErrorCode {
             HttpStatus.CONFLICT, "Slot can no longer be changed (already started or closed)"),
     PRODUCT_ALREADY_IN_SLOT(HttpStatus.CONFLICT, "Product is already part of this slot"),
     PRODUCT_INACTIVE(HttpStatus.CONFLICT, "Product is not active"),
+    FLASH_SALE_NOT_ACTIVE(HttpStatus.CONFLICT, "This item is not on flash sale right now"),
+    SOLD_OUT(HttpStatus.CONFLICT, "This flash sale item is sold out"),
+    ALREADY_PURCHASED_TODAY(
+            HttpStatus.CONFLICT, "You have already bought a flash sale product today"),
+    INSUFFICIENT_BALANCE(HttpStatus.CONFLICT, "Wallet balance is not enough"),
+    PURCHASE_IN_PROGRESS(
+            HttpStatus.CONFLICT, "A purchase with this Idempotency-Key is still being processed"),
+    IDEMPOTENCY_KEY_REUSED(
+            HttpStatus.UNPROCESSABLE_CONTENT,
+            "This Idempotency-Key was already used for a different item"),
+    SERVICE_BUSY(HttpStatus.SERVICE_UNAVAILABLE, "Service is busy, please retry in a moment"),
+    IDEMPOTENCY_KEY_REQUIRED(
+            HttpStatus.BAD_REQUEST,
+            "Idempotency-Key header is required (8-64 characters: letters, digits, - or _)"),
     INTERNAL_ERROR(HttpStatus.INTERNAL_SERVER_ERROR, "Unexpected error");
 
     private final HttpStatus status;

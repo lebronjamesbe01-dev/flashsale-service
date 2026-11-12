@@ -4,6 +4,7 @@ import com.flashsale.shared.error.BusinessException;
 import com.flashsale.shared.error.ErrorCode;
 import java.time.Duration;
 import java.util.List;
+import org.springframework.dao.DataAccessException;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.data.redis.core.script.RedisScript;
 import org.springframework.stereotype.Component;
@@ -41,11 +42,17 @@ public class RateLimiter {
         if (!properties.enabled()) {
             return;
         }
-        Long count =
-                redis.execute(
-                        HIT,
-                        List.of("rl:" + rule + ":" + subject),
-                        String.valueOf(window.toMillis()));
+        Long count;
+        try {
+            count =
+                    redis.execute(
+                            HIT,
+                            List.of("rl:" + rule + ":" + subject),
+                            String.valueOf(window.toMillis()));
+        } catch (DataAccessException redisDown) {
+            // Fail open: losing rate limiting for a moment is better than refusing every request.
+            return;
+        }
         if (count != null && count > limit) {
             throw new BusinessException(ErrorCode.TOO_MANY_REQUESTS);
         }

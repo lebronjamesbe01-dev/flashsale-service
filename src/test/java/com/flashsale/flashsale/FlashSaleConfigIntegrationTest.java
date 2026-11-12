@@ -137,6 +137,8 @@ class FlashSaleConfigIntegrationTest {
                 .andExpect(jsonPath("$.slot.items[0].remaining").value(7));
 
         mvc.perform(get("/api/v1/flash-sale/slots").with(USER)).andExpect(status().isOk());
+        send(post("/api/v1/admin/flash-sale/slots/" + slot + "/close"), "")
+                .andExpect(status().isOk());
     }
 
     @Test

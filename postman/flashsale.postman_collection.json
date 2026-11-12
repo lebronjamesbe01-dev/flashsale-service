@@ -16,6 +16,22 @@
   },
   "variable": [
     {
+      "key": "shopperEmail",
+      "value": ""
+    },
+    {
+      "key": "otherItemId",
+      "value": ""
+    },
+    {
+      "key": "idempotencyKey",
+      "value": ""
+    },
+    {
+      "key": "secondKey",
+      "value": ""
+    },
+    {
       "key": "baseUrl",
       "value": "http://localhost:8088"
     },
@@ -574,10 +590,10 @@
     },
     {
       "name": "2. Flash sale (shopper)",
-      "description": "Logs in as user0001 (100,000,000 VND balance), then browses.",
+      "description": "Logs in as a random seeded user (each has 100,000,000 VND), browses, buys, retries with the same Idempotency-Key, then tries a second purchase the same day.",
       "item": [
         {
-          "name": "Login as user0001",
+          "name": "Login as a random demo user",
           "request": {
             "method": "POST",
             "header": [
@@ -601,7 +617,7 @@
             "description": "",
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"identifier\": \"user0001@flashsale.local\",\n  \"password\": \"User@12345\"\n}",
+              "raw": "{\n  \"identifier\": \"{{shopperEmail}}\",\n  \"password\": \"User@12345\"\n}",
               "options": {
                 "raw": {
                   "language": "json"
@@ -613,6 +629,16 @@
             }
           },
           "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const n = 2 + Math.floor(Math.random() * 999);",
+                  "pm.collectionVariables.set('shopperEmail', `user${String(n).padStart(4, '0')}@flashsale.local`);"
+                ]
+              }
+            },
             {
               "listen": "test",
               "script": {
@@ -644,7 +670,7 @@
                 "current"
               ]
             },
-            "description": "Stores the first item (quota 5) as itemId for the purchase requests."
+            "description": "Picks an item that still has stock."
           },
           "event": [
             {
@@ -655,7 +681,11 @@
                   "pm.test('status 200', () => pm.response.to.have.status(200));",
                   "const s = pm.response.json().slot;",
                   "pm.test('a slot is open (demo calendar covers every hour for 7 days)', () => pm.expect(s).to.not.be.null);",
-                  "if (s) { pm.collectionVariables.set('itemId', s.items[0].itemId); pm.collectionVariables.set('scarceItemId', s.items[0].itemId); }"
+                  "if (s) {",
+                  "  const available = s.items.filter(i => i.remaining > 0);",
+                  "  pm.collectionVariables.set('itemId', (available[0] || s.items[0]).itemId);",
+                  "  pm.collectionVariables.set('otherItemId', s.items[s.items.length - 1].itemId);",
+                  "}"
                 ]
               }
             }
@@ -706,6 +736,173 @@
                 "api",
                 "v1",
                 "wallet"
+              ]
+            },
+            "description": ""
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 200', () => pm.response.to.have.status(200));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Buy item",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Idempotency-Key",
+                "value": "{{idempotencyKey}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/flash-sale/items/{{itemId}}/purchase",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "flash-sale",
+                "items",
+                "{{itemId}}",
+                "purchase"
+              ]
+            },
+            "description": "Idempotency-Key is generated per attempt."
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.collectionVariables.set('idempotencyKey', pm.variables.replaceIn('{{$guid}}'));"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('created, or sold out / already bought today on a re-run', () => pm.expect(pm.response.code).to.be.oneOf([201, 409]));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Retry with the same Idempotency-Key",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Idempotency-Key",
+                "value": "{{idempotencyKey}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/flash-sale/items/{{itemId}}/purchase",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "flash-sale",
+                "items",
+                "{{itemId}}",
+                "purchase"
+              ]
+            },
+            "description": ""
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (pm.response.code !== 409) {",
+                  "  pm.test('replayed, not bought twice', () => {",
+                  "    pm.response.to.have.status(200);",
+                  "    pm.expect(pm.response.headers.get('Idempotent-Replayed')).to.eql('true');",
+                  "  });",
+                  "}"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Second purchase today → ALREADY_PURCHASED_TODAY",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Idempotency-Key",
+                "value": "{{secondKey}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/flash-sale/items/{{otherItemId}}/purchase",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "flash-sale",
+                "items",
+                "{{otherItemId}}",
+                "purchase"
+              ]
+            },
+            "description": ""
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.collectionVariables.set('secondKey', pm.variables.replaceIn('{{$guid}}'));"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 409', () => pm.response.to.have.status(409));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "My orders",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/orders",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "orders"
               ]
             },
             "description": ""

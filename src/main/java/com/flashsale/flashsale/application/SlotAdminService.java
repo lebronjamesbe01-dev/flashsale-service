@@ -10,6 +10,7 @@ import com.flashsale.flashsale.domain.FlashSaleSlot;
 import com.flashsale.flashsale.domain.FlashSaleSlotRepository;
 import com.flashsale.flashsale.domain.SlotStatus;
 import com.flashsale.inventory.application.InventoryService;
+import com.flashsale.outbox.application.ProcessedEvents;
 import com.flashsale.shared.error.BusinessException;
 import com.flashsale.shared.error.ErrorCode;
 import com.flashsale.shared.time.BusinessClock;
@@ -38,6 +39,7 @@ public class SlotAdminService {
     private final InventoryService inventory;
     private final SlotViewAssembler assembler;
     private final BusinessClock clock;
+    private final ProcessedEvents processed;
 
     public SlotAdminService(
             FlashSaleSlotRepository slots,
@@ -46,7 +48,8 @@ public class SlotAdminService {
             ProductService products,
             InventoryService inventory,
             SlotViewAssembler assembler,
-            BusinessClock clock) {
+            BusinessClock clock,
+            ProcessedEvents processed) {
         this.slots = slots;
         this.items = items;
         this.itemStore = itemStore;
@@ -54,6 +57,7 @@ public class SlotAdminService {
         this.inventory = inventory;
         this.assembler = assembler;
         this.clock = clock;
+        this.processed = processed;
     }
 
     @Transactional
@@ -143,6 +147,27 @@ public class SlotAdminService {
         inventory.release(item.productId(), item.quota());
         items.delete(item);
         return assembler.one(slot);
+    }
+
+    /**
+     * Reaction to {@code product.deactivated}: the product leaves every slot that has not opened
+     * yet and its reserved quota goes back to the warehouse. Slots already open keep selling what
+     * shoppers were promised. Idempotent: a redelivered event is ignored.
+     */
+    @Transactional
+    public void withdrawProduct(UUID eventId, UUID productId) {
+        if (!processed.firstTime("flashsale-products", eventId)) {
+            return;
+        }
+        Instant now = clock.now();
+        for (FlashSaleItem item : items.findByProductId(productId)) {
+            boolean editable =
+                    slots.findById(item.slotId()).map(s -> s.isEditable(now)).orElse(false);
+            if (editable) {
+                inventory.release(item.productId(), item.quota());
+                items.delete(item);
+            }
+        }
     }
 
     @Transactional(readOnly = true)

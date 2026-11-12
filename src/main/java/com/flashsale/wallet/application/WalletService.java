@@ -12,6 +12,7 @@ import java.math.BigDecimal;
 import java.util.UUID;
 import org.springframework.context.event.EventListener;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 
 @Service
@@ -54,6 +55,24 @@ public class WalletService {
         transactions.save(
                 WalletTransaction.record(
                         userId, "TOP_UP", amount, balance, UUID.randomUUID(), clock.now()));
+        return balance;
+    }
+
+    /**
+     * Pays for a flash sale order inside the caller's transaction. Throws INSUFFICIENT_BALANCE
+     * without changing anything if the balance is too low.
+     */
+    @Transactional(propagation = Propagation.MANDATORY)
+    public BigDecimal payForOrder(UUID userId, BigDecimal amount, UUID orderId) {
+        if (wallets.debit(userId, amount, clock.now()) == 0) {
+            throw new BusinessException(ErrorCode.INSUFFICIENT_BALANCE);
+        }
+        BigDecimal balance = balance(userId);
+        // Flushed now so the INSERT runs before the caller takes the hot flash sale row lock,
+        // not at commit time while that lock is held.
+        transactions.saveAndFlush(
+                WalletTransaction.record(
+                        userId, "FLASH_PURCHASE", amount.negate(), balance, orderId, clock.now()));
         return balance;
     }
 

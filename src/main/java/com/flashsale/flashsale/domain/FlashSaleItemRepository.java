@@ -12,4 +12,6 @@ public interface FlashSaleItemRepository extends JpaRepository<FlashSaleItem, UU
     List<FlashSaleItem> findBySlotIdIn(Collection<UUID> slotIds);
 
     boolean existsBySlotIdAndProductId(UUID slotId, UUID productId);
+
+    List<FlashSaleItem> findByProductId(UUID productId);
 }
