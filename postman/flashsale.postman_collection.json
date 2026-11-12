@@ -2,7 +2,7 @@
   "info": {
     "name": "FlashSale Service",
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
-    "description": "Start the stack with `docker compose up -d --wait`, then run the folders in order (or the whole collection in the Runner)."
+    "description": "Bao phủ toàn bộ API của FlashSale Service.\n\n1. Chạy `docker compose up -d --wait` (profile demo: có tài khoản mẫu và API đọc OTP).\n2. Import file này (và environment `flashsale-local`), bấm **Run collection**, chạy các thư mục theo thứ tự.\n\nCollection tự sinh email/số điện thoại, tự đọc OTP, tự lưu token và id, tự sinh Idempotency-Key.\nRate limit: mỗi IP 20 lần đăng nhập/phút và 10 lần đăng ký/phút; chạy cả collection liên tục nhiều lần trong một phút có thể nhận 429 (hoặc chạy stack với RATE_LIMIT_ENABLED=false)."
   },
   "auth": {
     "type": "bearer",
@@ -14,84 +14,10 @@
       }
     ]
   },
-  "variable": [
-    {
-      "key": "shopperEmail",
-      "value": ""
-    },
-    {
-      "key": "otherItemId",
-      "value": ""
-    },
-    {
-      "key": "idempotencyKey",
-      "value": ""
-    },
-    {
-      "key": "secondKey",
-      "value": ""
-    },
-    {
-      "key": "baseUrl",
-      "value": "http://localhost:8088"
-    },
-    {
-      "key": "password",
-      "value": "Secret123"
-    },
-    {
-      "key": "email",
-      "value": ""
-    },
-    {
-      "key": "otp",
-      "value": ""
-    },
-    {
-      "key": "accessToken",
-      "value": ""
-    },
-    {
-      "key": "refreshToken",
-      "value": ""
-    },
-    {
-      "key": "adminToken",
-      "value": ""
-    },
-    {
-      "key": "itemId",
-      "value": ""
-    },
-    {
-      "key": "scarceItemId",
-      "value": ""
-    },
-    {
-      "key": "productId",
-      "value": ""
-    },
-    {
-      "key": "sku",
-      "value": ""
-    },
-    {
-      "key": "slotId",
-      "value": ""
-    },
-    {
-      "key": "slotStart",
-      "value": ""
-    },
-    {
-      "key": "slotEnd",
-      "value": ""
-    }
-  ],
   "item": [
     {
-      "name": "0. Demo accounts",
-      "description": "Seeded by the demo profile. Run these first.",
+      "name": "0. Health & demo accounts",
+      "description": "Kiểm tra hệ thống đã sẵn sàng và đăng nhập 2 tài khoản demo.",
       "item": [
         {
           "name": "Health",
@@ -108,7 +34,6 @@
                 "health"
               ]
             },
-            "description": "",
             "auth": {
               "type": "noauth"
             }
@@ -119,7 +44,8 @@
               "script": {
                 "type": "text/javascript",
                 "exec": [
-                  "pm.test('status 200', () => pm.response.to.have.status(200));"
+                  "pm.test('status 200', () => pm.response.to.have.status(200));",
+                  "pm.test('UP', () => pm.expect(pm.response.json().status).to.eql('UP'));"
                 ]
               }
             }
@@ -147,7 +73,6 @@
                 "login"
               ]
             },
-            "description": "",
             "body": {
               "mode": "raw",
               "raw": "{\n  \"identifier\": \"admin@flashsale.local\",\n  \"password\": \"Admin@12345\"\n}",
@@ -196,7 +121,6 @@
                 "login"
               ]
             },
-            "description": "",
             "body": {
               "mode": "raw",
               "raw": "{\n  \"identifier\": \"user0001@flashsale.local\",\n  \"password\": \"User@12345\"\n}",
@@ -218,8 +142,12 @@
                 "exec": [
                   "pm.test('status 200', () => pm.response.to.have.status(200));",
                   "const b = pm.response.json();",
-                  "pm.collectionVariables.set('accessToken', b.accessToken);",
-                  "pm.collectionVariables.set('refreshToken', b.refreshToken);"
+                  "pm.test('bearer token pair', () => {",
+                  "  pm.expect(b.tokenType).to.eql('Bearer');",
+                  "  pm.expect(b.accessToken).to.be.a('string');",
+                  "  pm.expect(b.refreshToken).to.be.a('string');",
+                  "});",
+                  "pm.collectionVariables.set('userToken', b.accessToken);"
                 ]
               }
             }
@@ -228,11 +156,11 @@
       ]
     },
     {
-      "name": "1. Auth",
-      "description": "Full account lifecycle. A fresh email is generated, the OTP is read from the demo inbox, tokens are stored automatically.",
+      "name": "1. Auth — email",
+      "description": "Đăng ký → OTP → kích hoạt → đăng nhập → refresh (xoay vòng, phát hiện dùng lại) → đăng xuất.",
       "item": [
         {
-          "name": "Register (email or phone)",
+          "name": "Register",
           "request": {
             "method": "POST",
             "header": [
@@ -253,7 +181,6 @@
                 "register"
               ]
             },
-            "description": "Creates a PENDING account and sends an OTP. Same answer whether or not the identifier exists. A phone such as 0901234567 works too.",
             "body": {
               "mode": "raw",
               "raw": "{\n  \"identifier\": \"{{email}}\",\n  \"password\": \"{{password}}\"\n}",
@@ -282,7 +209,106 @@
               "script": {
                 "type": "text/javascript",
                 "exec": [
-                  "pm.test('status 202', () => pm.response.to.have.status(202));"
+                  "pm.test('status 202', () => pm.response.to.have.status(202));",
+                  "pm.collectionVariables.set('registerMessage', pm.response.json().message);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Register same email again → same answer (no account enumeration)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/auth/register",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "auth",
+                "register"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"identifier\": \"{{email}}\",\n  \"password\": \"Another123\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "auth": {
+              "type": "noauth"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 202', () => pm.response.to.have.status(202));",
+                  "pm.test('same message as first registration', () =>",
+                  "  pm.expect(pm.response.json().message).to.eql(pm.collectionVariables.get('registerMessage')));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Register with weak password → 400",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/auth/register",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "auth",
+                "register"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"identifier\": \"weak{{$timestamp}}@example.com\",\n  \"password\": \"short\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "auth": {
+              "type": "noauth"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 400', () => pm.response.to.have.status(400));",
+                  "pm.test('error code VALIDATION_FAILED', () => pm.expect(pm.response.json().code).to.eql('VALIDATION_FAILED'));",
+                  "pm.test('password field reported', () => pm.expect(pm.response.json().fields).to.have.property('password'));"
                 ]
               }
             }
@@ -311,7 +337,6 @@
                 }
               ]
             },
-            "description": "Demo profile only. Stands in for opening the email or SMS.",
             "auth": {
               "type": "noauth"
             }
@@ -323,14 +348,64 @@
                 "type": "text/javascript",
                 "exec": [
                   "pm.test('status 200', () => pm.response.to.have.status(200));",
-                  "pm.collectionVariables.set('otp', pm.response.json().otp);"
+                  "const otp = pm.response.json().otp;",
+                  "pm.test('6-digit code', () => pm.expect(otp).to.match(/^\\d{6}$/));",
+                  "pm.collectionVariables.set('otp', otp);"
                 ]
               }
             }
           ]
         },
         {
-          "name": "Verify OTP",
+          "name": "Login before verification → 401",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/auth/login",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "auth",
+                "login"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"identifier\": \"{{email}}\",\n  \"password\": \"{{password}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "auth": {
+              "type": "noauth"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 401', () => pm.response.to.have.status(401));",
+                  "pm.test('error code INVALID_CREDENTIALS', () => pm.expect(pm.response.json().code).to.eql('INVALID_CREDENTIALS'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Verify with wrong OTP → 400",
           "request": {
             "method": "POST",
             "header": [
@@ -351,10 +426,67 @@
                 "verify-otp"
               ]
             },
-            "description": "",
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"identifier\": \"{{email}}\",\n  \"otp\": \"{{otp}}\"\n}",
+              "raw": "{\n  \"identifier\": \"{{email}}\",\n  \"otp\": \"{{wrongOtp}}\",\n  \"password\": \"{{password}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "auth": {
+              "type": "noauth"
+            }
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const otp = pm.collectionVariables.get('otp');",
+                  "pm.collectionVariables.set('wrongOtp', otp === '000000' ? '111111' : '000000');"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 400', () => pm.response.to.have.status(400));",
+                  "pm.test('error code OTP_INVALID', () => pm.expect(pm.response.json().code).to.eql('OTP_INVALID'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Verify OTP (sets the password)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/auth/verify-otp",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "auth",
+                "verify-otp"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"identifier\": \"{{email}}\",\n  \"otp\": \"{{otp}}\",\n  \"password\": \"{{password}}\"\n}",
               "options": {
                 "raw": {
                   "language": "json"
@@ -372,6 +504,54 @@
                 "type": "text/javascript",
                 "exec": [
                   "pm.test('status 200', () => pm.response.to.have.status(200));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Login with wrong password → 401",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/auth/login",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "auth",
+                "login"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"identifier\": \"{{email}}\",\n  \"password\": \"Wrong12345\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "auth": {
+              "type": "noauth"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 401', () => pm.response.to.have.status(401));",
+                  "pm.test('error code INVALID_CREDENTIALS', () => pm.expect(pm.response.json().code).to.eql('INVALID_CREDENTIALS'));"
                 ]
               }
             }
@@ -399,7 +579,6 @@
                 "login"
               ]
             },
-            "description": "",
             "body": {
               "mode": "raw",
               "raw": "{\n  \"identifier\": \"{{email}}\",\n  \"password\": \"{{password}}\"\n}",
@@ -421,6 +600,7 @@
                 "exec": [
                   "pm.test('status 200', () => pm.response.to.have.status(200));",
                   "const b = pm.response.json();",
+                  "pm.test('expiresIn 900s', () => pm.expect(b.expiresIn).to.eql(900));",
                   "pm.collectionVariables.set('accessToken', b.accessToken);",
                   "pm.collectionVariables.set('refreshToken', b.refreshToken);"
                 ]
@@ -444,8 +624,7 @@
                 "auth",
                 "me"
               ]
-            },
-            "description": ""
+            }
           },
           "event": [
             {
@@ -453,7 +632,44 @@
               "script": {
                 "type": "text/javascript",
                 "exec": [
-                  "pm.test('status 200', () => pm.response.to.have.status(200));"
+                  "pm.test('status 200', () => pm.response.to.have.status(200));",
+                  "const me = pm.response.json();",
+                  "pm.test('profile of the new user', () => {",
+                  "  pm.expect(me.identifier).to.eql(pm.collectionVariables.get('email'));",
+                  "  pm.expect(me.identifierType).to.eql('EMAIL');",
+                  "  pm.expect(me.role).to.eql('USER');",
+                  "});",
+                  "pm.collectionVariables.set('newUserId', me.id);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "New account has an empty wallet",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/wallet",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "wallet"
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 200', () => pm.response.to.have.status(200));",
+                  "pm.test('balance 0', () => pm.expect(Number(pm.response.json().balance)).to.eql(0));"
                 ]
               }
             }
@@ -481,7 +697,6 @@
                 "refresh"
               ]
             },
-            "description": "",
             "body": {
               "mode": "raw",
               "raw": "{\n  \"refreshToken\": \"{{refreshToken}}\"\n}",
@@ -503,8 +718,106 @@
                 "exec": [
                   "pm.test('status 200', () => pm.response.to.have.status(200));",
                   "const b = pm.response.json();",
+                  "pm.collectionVariables.set('oldRefreshToken', pm.collectionVariables.get('refreshToken'));",
+                  "pm.test('new refresh token issued', () => pm.expect(b.refreshToken).to.not.eql(pm.collectionVariables.get('refreshToken')));",
                   "pm.collectionVariables.set('accessToken', b.accessToken);",
                   "pm.collectionVariables.set('refreshToken', b.refreshToken);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Reuse old refresh token → 401 (theft detected)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/auth/refresh",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "auth",
+                "refresh"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"refreshToken\": \"{{oldRefreshToken}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "auth": {
+              "type": "noauth"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 401', () => pm.response.to.have.status(401));",
+                  "pm.test('error code INVALID_REFRESH_TOKEN', () => pm.expect(pm.response.json().code).to.eql('INVALID_REFRESH_TOKEN'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Newest refresh token also revoked after reuse → 401",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/auth/refresh",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "auth",
+                "refresh"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"refreshToken\": \"{{refreshToken}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "auth": {
+              "type": "noauth"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 401', () => pm.response.to.have.status(401));",
+                  "pm.test('error code INVALID_REFRESH_TOKEN', () => pm.expect(pm.response.json().code).to.eql('INVALID_REFRESH_TOKEN'));"
                 ]
               }
             }
@@ -532,7 +845,6 @@
                 "logout"
               ]
             },
-            "description": "",
             "body": {
               "mode": "raw",
               "raw": "{\n  \"refreshToken\": \"{{refreshToken}}\"\n}",
@@ -571,8 +883,7 @@
                 "auth",
                 "me"
               ]
-            },
-            "description": ""
+            }
           },
           "event": [
             {
@@ -589,8 +900,359 @@
       ]
     },
     {
-      "name": "2. Flash sale (shopper)",
-      "description": "Logs in as a random seeded user (each has 100,000,000 VND), browses, buys, retries with the same Idempotency-Key, then tries a second purchase the same day.",
+      "name": "1b. Auth — phone & resend OTP",
+      "description": "Đăng ký bằng số điện thoại; số viết kiểu nào cũng là một tài khoản.",
+      "item": [
+        {
+          "name": "Register with phone (local format)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/auth/register",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "auth",
+                "register"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"identifier\": \"{{phone}}\",\n  \"password\": \"{{password}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "auth": {
+              "type": "noauth"
+            }
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// 090 + 7 random digits: a valid Vietnamese mobile number.",
+                  "const n = String(Math.floor(Math.random() * 1e7)).padStart(7, '0');",
+                  "pm.collectionVariables.set('phone', `090${n}`);",
+                  "pm.collectionVariables.set('phoneE164', `+8490${n}`);"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 202', () => pm.response.to.have.status(202));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Resend OTP (always 202, at most one code per 60s)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/auth/resend-otp",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "auth",
+                "resend-otp"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"identifier\": \"{{phone}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "auth": {
+              "type": "noauth"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 202', () => pm.response.to.have.status(202));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Resend OTP for unknown identifier → same 202",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/auth/resend-otp",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "auth",
+                "resend-otp"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"identifier\": \"nobody{{$timestamp}}@example.com\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "auth": {
+              "type": "noauth"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 202', () => pm.response.to.have.status(202));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Read phone OTP from demo inbox",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/demo/otp?identifier={{phone}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "demo",
+                "otp"
+              ],
+              "query": [
+                {
+                  "key": "identifier",
+                  "value": "{{phone}}"
+                }
+              ]
+            },
+            "auth": {
+              "type": "noauth"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 200', () => pm.response.to.have.status(200));",
+                  "pm.test('stored in E.164', () => pm.expect(pm.response.json().identifier).to.eql(pm.collectionVariables.get('phoneE164')));",
+                  "pm.collectionVariables.set('otp', pm.response.json().otp);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Verify phone OTP (written as +84…)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/auth/verify-otp",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "auth",
+                "verify-otp"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"identifier\": \"{{phoneE164}}\",\n  \"otp\": \"{{otp}}\",\n  \"password\": \"{{password}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "auth": {
+              "type": "noauth"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 200', () => pm.response.to.have.status(200));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Login with phone written with spaces",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/auth/login",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "auth",
+                "login"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"identifier\": \"{{phoneSpaced}}\",\n  \"password\": \"{{password}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "auth": {
+              "type": "noauth"
+            }
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const p = pm.collectionVariables.get('phone');",
+                  "pm.collectionVariables.set('phoneSpaced', `${p.slice(0, 3)} ${p.slice(3, 6)} ${p.slice(6)}`);"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 200', () => pm.response.to.have.status(200));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Invalid identifier → 400",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/auth/login",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "auth",
+                "login"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"identifier\": \"not-an-email-or-phone\",\n  \"password\": \"{{password}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "auth": {
+              "type": "noauth"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 400', () => pm.response.to.have.status(400));"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "2. Flash sale — shopper",
+      "description": "Một user demo ngẫu nhiên (user0002…user1000) mua 1 sản phẩm. Chạy lại cùng ngày có thể nhận 409 vì user đã mua.",
       "item": [
         {
           "name": "Login as a random demo user",
@@ -614,7 +1276,6 @@
                 "login"
               ]
             },
-            "description": "",
             "body": {
               "mode": "raw",
               "raw": "{\n  \"identifier\": \"{{shopperEmail}}\",\n  \"password\": \"User@12345\"\n}",
@@ -645,9 +1306,7 @@
                 "type": "text/javascript",
                 "exec": [
                   "pm.test('status 200', () => pm.response.to.have.status(200));",
-                  "const b = pm.response.json();",
-                  "pm.collectionVariables.set('accessToken', b.accessToken);",
-                  "pm.collectionVariables.set('refreshToken', b.refreshToken);"
+                  "pm.collectionVariables.set('userToken', pm.response.json().accessToken);"
                 ]
               }
             }
@@ -670,7 +1329,16 @@
                 "current"
               ]
             },
-            "description": "Picks an item that still has stock."
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{userToken}}",
+                  "type": "string"
+                }
+              ]
+            }
           },
           "event": [
             {
@@ -680,11 +1348,13 @@
                 "exec": [
                   "pm.test('status 200', () => pm.response.to.have.status(200));",
                   "const s = pm.response.json().slot;",
-                  "pm.test('a slot is open (demo calendar covers every hour for 7 days)', () => pm.expect(s).to.not.be.null);",
+                  "pm.test('a slot is open (demo calendar: every 2h for 7 days)', () => pm.expect(s).to.not.be.null);",
                   "if (s) {",
                   "  const available = s.items.filter(i => i.remaining > 0);",
-                  "  pm.collectionVariables.set('itemId', (available[0] || s.items[0]).itemId);",
-                  "  pm.collectionVariables.set('otherItemId', s.items[s.items.length - 1].itemId);",
+                  "  const first = (available[0] || s.items[0]).itemId;",
+                  "  const other = s.items.find(i => i.itemId !== first) || s.items[0];",
+                  "  pm.collectionVariables.set('itemId', first);",
+                  "  pm.collectionVariables.set('otherItemId', other.itemId);",
                   "}"
                 ]
               }
@@ -708,7 +1378,16 @@
                 "slots"
               ]
             },
-            "description": ""
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{userToken}}",
+                  "type": "string"
+                }
+              ]
+            }
           },
           "event": [
             {
@@ -716,7 +1395,109 @@
               "script": {
                 "type": "text/javascript",
                 "exec": [
+                  "pm.test('status 200', () => pm.response.to.have.status(200));",
+                  "pm.test('list of slots', () => pm.expect(pm.response.json()).to.be.an('array'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Schedule of a given day",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/flash-sale/slots?date={{today}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "flash-sale",
+                "slots"
+              ],
+              "query": [
+                {
+                  "key": "date",
+                  "value": "{{today}}"
+                }
+              ]
+            },
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{userToken}}",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.collectionVariables.set('today', new Date(Date.now() + 7 * 3600000).toISOString().slice(0, 10));"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
                   "pm.test('status 200', () => pm.response.to.have.status(200));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Schedule with invalid date → 400",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/flash-sale/slots?date=12-11-2026",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "flash-sale",
+                "slots"
+              ],
+              "query": [
+                {
+                  "key": "date",
+                  "value": "12-11-2026"
+                }
+              ]
+            },
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{userToken}}",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 400', () => pm.response.to.have.status(400));"
                 ]
               }
             }
@@ -738,7 +1519,16 @@
                 "wallet"
               ]
             },
-            "description": ""
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{userToken}}",
+                  "type": "string"
+                }
+              ]
+            }
           },
           "event": [
             {
@@ -746,7 +1536,99 @@
               "script": {
                 "type": "text/javascript",
                 "exec": [
-                  "pm.test('status 200', () => pm.response.to.have.status(200));"
+                  "pm.test('status 200', () => pm.response.to.have.status(200));",
+                  "pm.collectionVariables.set('balanceBefore', pm.response.json().balance);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Buy without Idempotency-Key → 400",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/flash-sale/items/{{itemId}}/purchase",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "flash-sale",
+                "items",
+                "{{itemId}}",
+                "purchase"
+              ]
+            },
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{userToken}}",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 400', () => pm.response.to.have.status(400));",
+                  "pm.test('error code IDEMPOTENCY_KEY_REQUIRED', () => pm.expect(pm.response.json().code).to.eql('IDEMPOTENCY_KEY_REQUIRED'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Buy unknown item → 404",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Idempotency-Key",
+                "value": "{{$guid}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/flash-sale/items/{{$guid}}/purchase",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "flash-sale",
+                "items",
+                "{{$guid}}",
+                "purchase"
+              ]
+            },
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{userToken}}",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 404', () => pm.response.to.have.status(404));",
+                  "pm.test('error code SLOT_ITEM_NOT_FOUND', () => pm.expect(pm.response.json().code).to.eql('SLOT_ITEM_NOT_FOUND'));"
                 ]
               }
             }
@@ -776,7 +1658,16 @@
                 "purchase"
               ]
             },
-            "description": "Idempotency-Key is generated per attempt."
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{userToken}}",
+                  "type": "string"
+                }
+              ]
+            }
           },
           "event": [
             {
@@ -793,14 +1684,28 @@
               "script": {
                 "type": "text/javascript",
                 "exec": [
-                  "pm.test('created, or sold out / already bought today on a re-run', () => pm.expect(pm.response.code).to.be.oneOf([201, 409]));"
+                  "pm.test('created, or 409 on a re-run (sold out / already bought today)', () =>",
+                  "  pm.expect(pm.response.code).to.be.oneOf([201, 409]));",
+                  "pm.collectionVariables.set('bought', pm.response.code === 201 ? 'yes' : 'no');",
+                  "if (pm.response.code === 201) {",
+                  "  const b = pm.response.json();",
+                  "  pm.test('order paid, header not replayed', () => {",
+                  "    pm.expect(b.order.status).to.eql('PAID');",
+                  "    pm.expect(pm.response.headers.get('Idempotent-Replayed')).to.eql('false');",
+                  "  });",
+                  "  pm.test('wallet debited by the sale price', () =>",
+                  "    pm.expect(Number(b.balanceAfter)).to.be.closeTo(Number(pm.collectionVariables.get('balanceBefore')) - Number(b.order.price), 0.001));",
+                  "  pm.collectionVariables.set('orderId', b.order.orderId);",
+                  "} else {",
+                  "  pm.test('409 reason', () => pm.expect(pm.response.json().code).to.be.oneOf(['SOLD_OUT', 'ALREADY_PURCHASED_TODAY']));",
+                  "}"
                 ]
               }
             }
           ]
         },
         {
-          "name": "Retry with the same Idempotency-Key",
+          "name": "Retry with the same Idempotency-Key → same order",
           "request": {
             "method": "POST",
             "header": [
@@ -823,7 +1728,16 @@
                 "purchase"
               ]
             },
-            "description": ""
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{userToken}}",
+                  "type": "string"
+                }
+              ]
+            }
           },
           "event": [
             {
@@ -831,11 +1745,68 @@
               "script": {
                 "type": "text/javascript",
                 "exec": [
-                  "if (pm.response.code !== 409) {",
-                  "  pm.test('replayed, not bought twice', () => {",
+                  "if (pm.collectionVariables.get('bought') === 'yes') {",
+                  "  pm.test('200 replay, same order', () => {",
                   "    pm.response.to.have.status(200);",
                   "    pm.expect(pm.response.headers.get('Idempotent-Replayed')).to.eql('true');",
+                  "    pm.expect(pm.response.json().order.orderId).to.eql(pm.collectionVariables.get('orderId'));",
                   "  });",
+                  "} else {",
+                  "  pm.test('still 409', () => pm.response.to.have.status(409));",
+                  "}"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Same Idempotency-Key, other item → 422",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Idempotency-Key",
+                "value": "{{idempotencyKey}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/flash-sale/items/{{otherItemId}}/purchase",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "flash-sale",
+                "items",
+                "{{otherItemId}}",
+                "purchase"
+              ]
+            },
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{userToken}}",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (pm.collectionVariables.get('bought') === 'yes' && pm.collectionVariables.get('otherItemId') !== pm.collectionVariables.get('itemId')) {",
+                  "  pm.test('IDEMPOTENCY_KEY_REUSED', () => {",
+                  "    pm.response.to.have.status(422);",
+                  "    pm.expect(pm.response.json().code).to.eql('IDEMPOTENCY_KEY_REUSED');",
+                  "  });",
+                  "} else {",
+                  "  pm.test('rejected', () => pm.expect(pm.response.code).to.be.oneOf([200, 409, 422]));",
                   "}"
                 ]
               }
@@ -866,7 +1837,16 @@
                 "purchase"
               ]
             },
-            "description": ""
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{userToken}}",
+                  "type": "string"
+                }
+              ]
+            }
           },
           "event": [
             {
@@ -883,7 +1863,10 @@
               "script": {
                 "type": "text/javascript",
                 "exec": [
-                  "pm.test('status 409', () => pm.response.to.have.status(409));"
+                  "pm.test('409', () => pm.response.to.have.status(409));",
+                  "if (pm.collectionVariables.get('bought') === 'yes') {",
+                  "  pm.test('ALREADY_PURCHASED_TODAY', () => pm.expect(pm.response.json().code).to.eql('ALREADY_PURCHASED_TODAY'));",
+                  "}"
                 ]
               }
             }
@@ -905,7 +1888,16 @@
                 "orders"
               ]
             },
-            "description": ""
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{userToken}}",
+                  "type": "string"
+                }
+              ]
+            }
           },
           "event": [
             {
@@ -913,7 +1905,11 @@
               "script": {
                 "type": "text/javascript",
                 "exec": [
-                  "pm.test('status 200', () => pm.response.to.have.status(200));"
+                  "pm.test('status 200', () => pm.response.to.have.status(200));",
+                  "if (pm.collectionVariables.get('bought') === 'yes') {",
+                  "  pm.test('contains the new order', () =>",
+                  "    pm.expect(pm.response.json().map(o => o.orderId)).to.include(pm.collectionVariables.get('orderId')));",
+                  "}"
                 ]
               }
             }
@@ -922,8 +1918,8 @@
       ]
     },
     {
-      "name": "3. Admin",
-      "description": "Admin token from 'Login as admin'. Creates a product, schedules a slot, publishes and closes it, and shows how quotas reserve warehouse stock.",
+      "name": "3. Admin — products",
+      "description": "Tạo, xem, sửa sản phẩm.",
       "item": [
         {
           "name": "Login as admin",
@@ -947,7 +1943,6 @@
                 "login"
               ]
             },
-            "description": "",
             "body": {
               "mode": "raw",
               "raw": "{\n  \"identifier\": \"admin@flashsale.local\",\n  \"password\": \"Admin@12345\"\n}",
@@ -996,7 +1991,6 @@
                 "products"
               ]
             },
-            "description": "",
             "body": {
               "mode": "raw",
               "raw": "{\n  \"sku\": \"{{sku}}\",\n  \"name\": \"Postman demo product\",\n  \"listPrice\": 2000000,\n  \"initialStock\": 100\n}",
@@ -1033,17 +2027,24 @@
                 "type": "text/javascript",
                 "exec": [
                   "pm.test('status 201', () => pm.response.to.have.status(201));",
-                  "pm.collectionVariables.set('productId', pm.response.json().id);"
+                  "const p = pm.response.json();",
+                  "pm.test('active product', () => pm.expect(p.active).to.eql(true));",
+                  "pm.collectionVariables.set('productId', p.id);"
                 ]
               }
             }
           ]
         },
         {
-          "name": "List products",
+          "name": "Create with duplicate SKU → 409",
           "request": {
-            "method": "GET",
-            "header": [],
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
             "url": {
               "raw": "{{baseUrl}}/api/v1/admin/products",
               "host": [
@@ -1056,7 +2057,15 @@
                 "products"
               ]
             },
-            "description": "",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"sku\": \"{{sku}}\",\n  \"name\": \"Duplicate\",\n  \"listPrice\": 1000,\n  \"initialStock\": 1\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
             "auth": {
               "type": "bearer",
               "bearer": [
@@ -1074,12 +2083,535 @@
               "script": {
                 "type": "text/javascript",
                 "exec": [
-                  "pm.test('status 200', () => pm.response.to.have.status(200));"
+                  "pm.test('status 409', () => pm.response.to.have.status(409));",
+                  "pm.test('error code SKU_ALREADY_EXISTS', () => pm.expect(pm.response.json().code).to.eql('SKU_ALREADY_EXISTS'));"
                 ]
               }
             }
           ]
         },
+        {
+          "name": "Create with invalid data → 400",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/admin/products",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "admin",
+                "products"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"sku\": \"bad sku!\",\n  \"name\": \"\",\n  \"listPrice\": 0,\n  \"initialStock\": -1\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{adminToken}}",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 400', () => pm.response.to.have.status(400));",
+                  "pm.test('error code VALIDATION_FAILED', () => pm.expect(pm.response.json().code).to.eql('VALIDATION_FAILED'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Get product",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/admin/products/{{productId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "admin",
+                "products",
+                "{{productId}}"
+              ]
+            },
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{adminToken}}",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 200', () => pm.response.to.have.status(200));",
+                  "pm.test('same sku', () => pm.expect(pm.response.json().sku).to.eql(pm.collectionVariables.get('sku')));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Get unknown product → 404",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/admin/products/{{$guid}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "admin",
+                "products",
+                "{{$guid}}"
+              ]
+            },
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{adminToken}}",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 404', () => pm.response.to.have.status(404));",
+                  "pm.test('error code PRODUCT_NOT_FOUND', () => pm.expect(pm.response.json().code).to.eql('PRODUCT_NOT_FOUND'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "List products (page 0, size 5)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/admin/products?page=0&size=5",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "admin",
+                "products"
+              ],
+              "query": [
+                {
+                  "key": "page",
+                  "value": "0"
+                },
+                {
+                  "key": "size",
+                  "value": "5"
+                }
+              ]
+            },
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{adminToken}}",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 200', () => pm.response.to.have.status(200));",
+                  "const b = pm.response.json();",
+                  "pm.test('page shape', () => {",
+                  "  pm.expect(b.items.length).to.be.at.most(5);",
+                  "  pm.expect(b.total).to.be.above(0);",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Update name and list price",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/admin/products/{{productId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "admin",
+                "products",
+                "{{productId}}"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Postman demo product v2\",\n  \"listPrice\": 2100000,\n  \"status\": \"ACTIVE\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{adminToken}}",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 200', () => pm.response.to.have.status(200));",
+                  "pm.test('renamed', () => pm.expect(pm.response.json().name).to.eql('Postman demo product v2'));"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "4. Admin — inventory",
+      "description": "Xem và điều chỉnh tồn kho.",
+      "item": [
+        {
+          "name": "Inventory of the new product",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/admin/inventory/{{productId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "admin",
+                "inventory",
+                "{{productId}}"
+              ]
+            },
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{adminToken}}",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 200', () => pm.response.to.have.status(200));",
+                  "const i = pm.response.json();",
+                  "pm.test('100 on hand, nothing reserved', () => {",
+                  "  pm.expect(i.onHand).to.eql(100);",
+                  "  pm.expect(i.reserved).to.eql(0);",
+                  "  pm.expect(i.available).to.eql(100);",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Receive 50 units",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/admin/inventory/{{productId}}/adjust",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "admin",
+                "inventory",
+                "{{productId}}",
+                "adjust"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"delta\": 50\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{adminToken}}",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 200', () => pm.response.to.have.status(200));",
+                  "pm.test('150 on hand', () => pm.expect(pm.response.json().onHand).to.eql(150));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Remove 50 units",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/admin/inventory/{{productId}}/adjust",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "admin",
+                "inventory",
+                "{{productId}}",
+                "adjust"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"delta\": -50\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{adminToken}}",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 200', () => pm.response.to.have.status(200));",
+                  "pm.test('100 on hand', () => pm.expect(pm.response.json().onHand).to.eql(100));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Remove more than on hand → 409",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/admin/inventory/{{productId}}/adjust",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "admin",
+                "inventory",
+                "{{productId}}",
+                "adjust"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"delta\": -1000\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{adminToken}}",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 409', () => pm.response.to.have.status(409));",
+                  "pm.test('error code INVALID_INVENTORY_ADJUSTMENT', () => pm.expect(pm.response.json().code).to.eql('INVALID_INVENTORY_ADJUSTMENT'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Inventory of unknown product → 404",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/admin/inventory/{{$guid}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "admin",
+                "inventory",
+                "{{$guid}}"
+              ]
+            },
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{adminToken}}",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 404', () => pm.response.to.have.status(404));",
+                  "pm.test('error code PRODUCT_NOT_FOUND', () => pm.expect(pm.response.json().code).to.eql('PRODUCT_NOT_FOUND'));"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "5. Admin — flash sale slots",
+      "description": "Vòng đời khung giờ: tạo nháp → sửa → thêm/sửa/xoá sản phẩm (kho tự giữ/trả hàng) → publish → đóng.",
+      "item": [
         {
           "name": "Create draft slot",
           "request": {
@@ -1103,7 +2635,6 @@
                 "slots"
               ]
             },
-            "description": "",
             "body": {
               "mode": "raw",
               "raw": "{\n  \"name\": \"Postman slot\",\n  \"startAt\": \"{{slotStart}}\",\n  \"endAt\": \"{{slotEnd}}\"\n}",
@@ -1130,10 +2661,10 @@
               "script": {
                 "type": "text/javascript",
                 "exec": [
-                  "// A date 10+ days ahead so it never overlaps the 7-day demo calendar.",
+                  "// A day 10+ days ahead so the slot never overlaps the 7-day demo calendar.",
                   "const days = 10 + Math.floor(Math.random() * 3000);",
-                  "const d = new Date(Date.now() + days * 86400000);",
-                  "const ymd = d.toISOString().slice(0, 10);",
+                  "const ymd = new Date(Date.now() + days * 86400000).toISOString().slice(0, 10);",
+                  "pm.collectionVariables.set('slotDate', ymd);",
                   "pm.collectionVariables.set('slotStart', `${ymd}T03:00:00Z`); // 10:00 Vietnam",
                   "pm.collectionVariables.set('slotEnd', `${ymd}T04:00:00Z`);   // 11:00 Vietnam"
                 ]
@@ -1145,7 +2676,360 @@
                 "type": "text/javascript",
                 "exec": [
                   "pm.test('status 201', () => pm.response.to.have.status(201));",
-                  "pm.collectionVariables.set('slotId', pm.response.json().id);"
+                  "const s = pm.response.json();",
+                  "pm.test('draft without items', () => {",
+                  "  pm.expect(s.status).to.eql('DRAFT');",
+                  "  pm.expect(s.items).to.eql([]);",
+                  "});",
+                  "pm.collectionVariables.set('slotId', s.id);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Create slot crossing midnight → 400",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/admin/flash-sale/slots",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "admin",
+                "flash-sale",
+                "slots"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Crosses midnight\",\n  \"startAt\": \"{{slotDate}}T16:00:00Z\",\n  \"endAt\": \"{{slotDate}}T18:00:00Z\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{adminToken}}",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 400', () => pm.response.to.have.status(400));",
+                  "pm.test('error code INVALID_SLOT_TIME', () => pm.expect(pm.response.json().code).to.eql('INVALID_SLOT_TIME'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Create slot ending before it starts → 400",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/admin/flash-sale/slots",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "admin",
+                "flash-sale",
+                "slots"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Backwards\",\n  \"startAt\": \"{{slotEnd}}\",\n  \"endAt\": \"{{slotStart}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{adminToken}}",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 400', () => pm.response.to.have.status(400));",
+                  "pm.test('error code INVALID_SLOT_TIME', () => pm.expect(pm.response.json().code).to.eql('INVALID_SLOT_TIME'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Reschedule draft (10:00–12:00 VN)",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/admin/flash-sale/slots/{{slotId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "admin",
+                "flash-sale",
+                "slots",
+                "{{slotId}}"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Postman slot (rescheduled)\",\n  \"startAt\": \"{{slotStart}}\",\n  \"endAt\": \"{{slotDate}}T05:00:00Z\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{adminToken}}",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 200', () => pm.response.to.have.status(200));",
+                  "const s = pm.response.json();",
+                  "pm.test('renamed and extended', () => {",
+                  "  pm.expect(s.name).to.eql('Postman slot (rescheduled)');",
+                  "  pm.expect(s.endAt).to.eql(`${pm.collectionVariables.get('slotDate')}T05:00:00Z`);",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Get slot",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/admin/flash-sale/slots/{{slotId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "admin",
+                "flash-sale",
+                "slots",
+                "{{slotId}}"
+              ]
+            },
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{adminToken}}",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 200', () => pm.response.to.have.status(200));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Get unknown slot → 404",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/admin/flash-sale/slots/{{$guid}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "admin",
+                "flash-sale",
+                "slots",
+                "{{$guid}}"
+              ]
+            },
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{adminToken}}",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 404', () => pm.response.to.have.status(404));",
+                  "pm.test('error code SLOT_NOT_FOUND', () => pm.expect(pm.response.json().code).to.eql('SLOT_NOT_FOUND'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "List slots of that day (any status)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/admin/flash-sale/slots?date={{slotDate}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "admin",
+                "flash-sale",
+                "slots"
+              ],
+              "query": [
+                {
+                  "key": "date",
+                  "value": "{{slotDate}}"
+                }
+              ]
+            },
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{adminToken}}",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 200', () => pm.response.to.have.status(200));",
+                  "pm.test('contains the draft', () =>",
+                  "  pm.expect(pm.response.json().map(s => s.id)).to.include(pm.collectionVariables.get('slotId')));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "List today's slots",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/admin/flash-sale/slots",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "admin",
+                "flash-sale",
+                "slots"
+              ]
+            },
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{adminToken}}",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 200', () => pm.response.to.have.status(200));"
                 ]
               }
             }
@@ -1176,7 +3060,6 @@
                 "items"
               ]
             },
-            "description": "",
             "body": {
               "mode": "raw",
               "raw": "{\n  \"productId\": \"{{productId}}\",\n  \"salePrice\": 990000,\n  \"quota\": 30\n}",
@@ -1203,14 +3086,75 @@
               "script": {
                 "type": "text/javascript",
                 "exec": [
-                  "pm.test('status 201', () => pm.response.to.have.status(201));"
+                  "pm.test('status 201', () => pm.response.to.have.status(201));",
+                  "const item = pm.response.json().items[0];",
+                  "pm.test('item with quota 30', () => pm.expect(item.quota).to.eql(30));",
+                  "pm.collectionVariables.set('slotItemId', item.itemId);"
                 ]
               }
             }
           ]
         },
         {
-          "name": "Inventory → reserved 30, available 70",
+          "name": "Add same product again → 409",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/admin/flash-sale/slots/{{slotId}}/items",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "admin",
+                "flash-sale",
+                "slots",
+                "{{slotId}}",
+                "items"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"productId\": \"{{productId}}\",\n  \"salePrice\": 990000,\n  \"quota\": 1\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{adminToken}}",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 409', () => pm.response.to.have.status(409));",
+                  "pm.test('error code PRODUCT_ALREADY_IN_SLOT', () => pm.expect(pm.response.json().code).to.eql('PRODUCT_ALREADY_IN_SLOT'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Inventory → 30 reserved",
           "request": {
             "method": "GET",
             "header": [],
@@ -1227,7 +3171,6 @@
                 "{{productId}}"
               ]
             },
-            "description": "",
             "auth": {
               "type": "bearer",
               "bearer": [
@@ -1246,16 +3189,19 @@
                 "type": "text/javascript",
                 "exec": [
                   "pm.test('status 200', () => pm.response.to.have.status(200));",
-                  "pm.test('30 reserved', () => pm.expect(pm.response.json().reserved).to.eql(30));"
+                  "pm.test('30 reserved, 70 available', () => {",
+                  "  pm.expect(pm.response.json().reserved).to.eql(30);",
+                  "  pm.expect(pm.response.json().available).to.eql(70);",
+                  "});"
                 ]
               }
             }
           ]
         },
         {
-          "name": "Remove 80 units → INVALID_INVENTORY_ADJUSTMENT",
+          "name": "Change item: price 950000, quota 40",
           "request": {
-            "method": "POST",
+            "method": "PUT",
             "header": [
               {
                 "key": "Content-Type",
@@ -1263,7 +3209,7 @@
               }
             ],
             "url": {
-              "raw": "{{baseUrl}}/api/v1/admin/inventory/{{productId}}/adjust",
+              "raw": "{{baseUrl}}/api/v1/admin/flash-sale/slots/{{slotId}}/items/{{slotItemId}}",
               "host": [
                 "{{baseUrl}}"
               ],
@@ -1271,15 +3217,16 @@
                 "api",
                 "v1",
                 "admin",
-                "inventory",
-                "{{productId}}",
-                "adjust"
+                "flash-sale",
+                "slots",
+                "{{slotId}}",
+                "items",
+                "{{slotItemId}}"
               ]
             },
-            "description": "Removing 80 of 100 would leave 20 < 30 reserved: rejected.",
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"delta\": -80\n}",
+              "raw": "{\n  \"salePrice\": 950000,\n  \"quota\": 40\n}",
               "options": {
                 "raw": {
                   "language": "json"
@@ -1303,16 +3250,18 @@
               "script": {
                 "type": "text/javascript",
                 "exec": [
-                  "pm.test('status 409', () => pm.response.to.have.status(409));"
+                  "pm.test('status 200', () => pm.response.to.have.status(200));",
+                  "const item = pm.response.json().items[0];",
+                  "pm.test('quota 40', () => pm.expect(item.quota).to.eql(40));"
                 ]
               }
             }
           ]
         },
         {
-          "name": "Receive 50 more units",
+          "name": "Change quota above stock → 409",
           "request": {
-            "method": "POST",
+            "method": "PUT",
             "header": [
               {
                 "key": "Content-Type",
@@ -1320,7 +3269,7 @@
               }
             ],
             "url": {
-              "raw": "{{baseUrl}}/api/v1/admin/inventory/{{productId}}/adjust",
+              "raw": "{{baseUrl}}/api/v1/admin/flash-sale/slots/{{slotId}}/items/{{slotItemId}}",
               "host": [
                 "{{baseUrl}}"
               ],
@@ -1328,15 +3277,16 @@
                 "api",
                 "v1",
                 "admin",
-                "inventory",
-                "{{productId}}",
-                "adjust"
+                "flash-sale",
+                "slots",
+                "{{slotId}}",
+                "items",
+                "{{slotItemId}}"
               ]
             },
-            "description": "",
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"delta\": 50\n}",
+              "raw": "{\n  \"salePrice\": 950000,\n  \"quota\": 1000\n}",
               "options": {
                 "raw": {
                   "language": "json"
@@ -1360,145 +3310,15 @@
               "script": {
                 "type": "text/javascript",
                 "exec": [
-                  "pm.test('status 200', () => pm.response.to.have.status(200));"
+                  "pm.test('status 409', () => pm.response.to.have.status(409));",
+                  "pm.test('error code INSUFFICIENT_INVENTORY', () => pm.expect(pm.response.json().code).to.eql('INSUFFICIENT_INVENTORY'));"
                 ]
               }
             }
           ]
         },
         {
-          "name": "Publish slot",
-          "request": {
-            "method": "POST",
-            "header": [],
-            "url": {
-              "raw": "{{baseUrl}}/api/v1/admin/flash-sale/slots/{{slotId}}/publish",
-              "host": [
-                "{{baseUrl}}"
-              ],
-              "path": [
-                "api",
-                "v1",
-                "admin",
-                "flash-sale",
-                "slots",
-                "{{slotId}}",
-                "publish"
-              ]
-            },
-            "description": "",
-            "auth": {
-              "type": "bearer",
-              "bearer": [
-                {
-                  "key": "token",
-                  "value": "{{adminToken}}",
-                  "type": "string"
-                }
-              ]
-            }
-          },
-          "event": [
-            {
-              "listen": "test",
-              "script": {
-                "type": "text/javascript",
-                "exec": [
-                  "pm.test('status 200', () => pm.response.to.have.status(200));"
-                ]
-              }
-            }
-          ]
-        },
-        {
-          "name": "Get slot",
-          "request": {
-            "method": "GET",
-            "header": [],
-            "url": {
-              "raw": "{{baseUrl}}/api/v1/admin/flash-sale/slots/{{slotId}}",
-              "host": [
-                "{{baseUrl}}"
-              ],
-              "path": [
-                "api",
-                "v1",
-                "admin",
-                "flash-sale",
-                "slots",
-                "{{slotId}}"
-              ]
-            },
-            "description": "",
-            "auth": {
-              "type": "bearer",
-              "bearer": [
-                {
-                  "key": "token",
-                  "value": "{{adminToken}}",
-                  "type": "string"
-                }
-              ]
-            }
-          },
-          "event": [
-            {
-              "listen": "test",
-              "script": {
-                "type": "text/javascript",
-                "exec": [
-                  "pm.test('status 200', () => pm.response.to.have.status(200));"
-                ]
-              }
-            }
-          ]
-        },
-        {
-          "name": "Close slot (returns unsold quota)",
-          "request": {
-            "method": "POST",
-            "header": [],
-            "url": {
-              "raw": "{{baseUrl}}/api/v1/admin/flash-sale/slots/{{slotId}}/close",
-              "host": [
-                "{{baseUrl}}"
-              ],
-              "path": [
-                "api",
-                "v1",
-                "admin",
-                "flash-sale",
-                "slots",
-                "{{slotId}}",
-                "close"
-              ]
-            },
-            "description": "",
-            "auth": {
-              "type": "bearer",
-              "bearer": [
-                {
-                  "key": "token",
-                  "value": "{{adminToken}}",
-                  "type": "string"
-                }
-              ]
-            }
-          },
-          "event": [
-            {
-              "listen": "test",
-              "script": {
-                "type": "text/javascript",
-                "exec": [
-                  "pm.test('status 200', () => pm.response.to.have.status(200));"
-                ]
-              }
-            }
-          ]
-        },
-        {
-          "name": "Inventory → reserved back to 0",
+          "name": "Inventory → 40 reserved",
           "request": {
             "method": "GET",
             "header": [],
@@ -1515,7 +3335,93 @@
                 "{{productId}}"
               ]
             },
-            "description": "",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{adminToken}}",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 200', () => pm.response.to.have.status(200));",
+                  "pm.test('40 reserved', () => pm.expect(pm.response.json().reserved).to.eql(40));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Remove item",
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/admin/flash-sale/slots/{{slotId}}/items/{{slotItemId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "admin",
+                "flash-sale",
+                "slots",
+                "{{slotId}}",
+                "items",
+                "{{slotItemId}}"
+              ]
+            },
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{adminToken}}",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 200', () => pm.response.to.have.status(200));",
+                  "pm.test('slot empty again', () => pm.expect(pm.response.json().items).to.eql([]));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Inventory → quota returned",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/admin/inventory/{{productId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "admin",
+                "inventory",
+                "{{productId}}"
+              ]
+            },
             "auth": {
               "type": "bearer",
               "bearer": [
@@ -1541,7 +3447,641 @@
           ]
         },
         {
-          "name": "Top up user0001 wallet",
+          "name": "Add product again (quota 30)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/admin/flash-sale/slots/{{slotId}}/items",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "admin",
+                "flash-sale",
+                "slots",
+                "{{slotId}}",
+                "items"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"productId\": \"{{productId}}\",\n  \"salePrice\": 990000,\n  \"quota\": 30\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{adminToken}}",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 201', () => pm.response.to.have.status(201));",
+                  "pm.collectionVariables.set('slotItemId', pm.response.json().items[0].itemId);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Publish slot",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/admin/flash-sale/slots/{{slotId}}/publish",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "admin",
+                "flash-sale",
+                "slots",
+                "{{slotId}}",
+                "publish"
+              ]
+            },
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{adminToken}}",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 200', () => pm.response.to.have.status(200));",
+                  "pm.test('published', () => pm.expect(pm.response.json().status).to.eql('PUBLISHED'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Reschedule a published slot → 409",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/admin/flash-sale/slots/{{slotId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "admin",
+                "flash-sale",
+                "slots",
+                "{{slotId}}"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Too late\",\n  \"startAt\": \"{{slotStart}}\",\n  \"endAt\": \"{{slotEnd}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{adminToken}}",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 409', () => pm.response.to.have.status(409));",
+                  "pm.test('error code SLOT_NOT_EDITABLE', () => pm.expect(pm.response.json().code).to.eql('SLOT_NOT_EDITABLE'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Publish again → 409",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/admin/flash-sale/slots/{{slotId}}/publish",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "admin",
+                "flash-sale",
+                "slots",
+                "{{slotId}}",
+                "publish"
+              ]
+            },
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{adminToken}}",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 409', () => pm.response.to.have.status(409));",
+                  "pm.test('error code SLOT_NOT_EDITABLE', () => pm.expect(pm.response.json().code).to.eql('SLOT_NOT_EDITABLE'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Close slot (unsold quota returns to stock)",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/admin/flash-sale/slots/{{slotId}}/close",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "admin",
+                "flash-sale",
+                "slots",
+                "{{slotId}}",
+                "close"
+              ]
+            },
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{adminToken}}",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 200', () => pm.response.to.have.status(200));",
+                  "const s = pm.response.json();",
+                  "pm.test('closed, quota frozen at sold', () => {",
+                  "  pm.expect(s.status).to.eql('CLOSED');",
+                  "  pm.expect(s.items[0].quota).to.eql(s.items[0].sold);",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Inventory → reserved back to 0",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/admin/inventory/{{productId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "admin",
+                "inventory",
+                "{{productId}}"
+              ]
+            },
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{adminToken}}",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 200', () => pm.response.to.have.status(200));",
+                  "pm.test('nothing reserved', () => pm.expect(pm.response.json().reserved).to.eql(0));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Close again → idempotent 200",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/admin/flash-sale/slots/{{slotId}}/close",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "admin",
+                "flash-sale",
+                "slots",
+                "{{slotId}}",
+                "close"
+              ]
+            },
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{adminToken}}",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 200', () => pm.response.to.have.status(200));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Add item to a closed slot → 409",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/admin/flash-sale/slots/{{slotId}}/items",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "admin",
+                "flash-sale",
+                "slots",
+                "{{slotId}}",
+                "items"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"productId\": \"{{productId}}\",\n  \"salePrice\": 990000,\n  \"quota\": 1\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{adminToken}}",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 409', () => pm.response.to.have.status(409));",
+                  "pm.test('error code SLOT_NOT_EDITABLE', () => pm.expect(pm.response.json().code).to.eql('SLOT_NOT_EDITABLE'));"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "6. Admin — deactivate product",
+      "description": "Ngừng bán sản phẩm: không thể đưa vào khung giờ mới.",
+      "item": [
+        {
+          "name": "Deactivate product",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/admin/products/{{productId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "admin",
+                "products",
+                "{{productId}}"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Postman demo product v2\",\n  \"listPrice\": 2100000,\n  \"status\": \"INACTIVE\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{adminToken}}",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 200', () => pm.response.to.have.status(200));",
+                  "pm.test('inactive', () => pm.expect(pm.response.json().active).to.eql(false));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Create another draft slot",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/admin/flash-sale/slots",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "admin",
+                "flash-sale",
+                "slots"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Postman slot 2\",\n  \"startAt\": \"{{slotStart}}\",\n  \"endAt\": \"{{slotEnd}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{adminToken}}",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// A day 10+ days ahead so the slot never overlaps the 7-day demo calendar.",
+                  "const days = 10 + Math.floor(Math.random() * 3000);",
+                  "const ymd = new Date(Date.now() + days * 86400000).toISOString().slice(0, 10);",
+                  "pm.collectionVariables.set('slotDate', ymd);",
+                  "pm.collectionVariables.set('slotStart', `${ymd}T03:00:00Z`); // 10:00 Vietnam",
+                  "pm.collectionVariables.set('slotEnd', `${ymd}T04:00:00Z`);   // 11:00 Vietnam"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 201', () => pm.response.to.have.status(201));",
+                  "pm.collectionVariables.set('slotId2', pm.response.json().id);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Add inactive product → 409",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/admin/flash-sale/slots/{{slotId2}}/items",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "admin",
+                "flash-sale",
+                "slots",
+                "{{slotId2}}",
+                "items"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"productId\": \"{{productId}}\",\n  \"salePrice\": 990000,\n  \"quota\": 1\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{adminToken}}",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 409', () => pm.response.to.have.status(409));",
+                  "pm.test('error code PRODUCT_INACTIVE', () => pm.expect(pm.response.json().code).to.eql('PRODUCT_INACTIVE'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Cancel the draft (close)",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/admin/flash-sale/slots/{{slotId2}}/close",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "admin",
+                "flash-sale",
+                "slots",
+                "{{slotId2}}",
+                "close"
+              ]
+            },
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{adminToken}}",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 200', () => pm.response.to.have.status(200));",
+                  "pm.test('closed', () => pm.expect(pm.response.json().status).to.eql('CLOSED'));"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "7. Admin — wallet top-up",
+      "description": "Nạp tiền vào ví để test.",
+      "item": [
+        {
+          "name": "Top up user0001",
           "request": {
             "method": "POST",
             "header": [
@@ -1564,7 +4104,6 @@
                 "top-up"
               ]
             },
-            "description": "",
             "body": {
               "mode": "raw",
               "raw": "{\n  \"amount\": 500000\n}",
@@ -1591,13 +4130,798 @@
               "script": {
                 "type": "text/javascript",
                 "exec": [
-                  "pm.test('status 200', () => pm.response.to.have.status(200));"
+                  "pm.test('status 200', () => pm.response.to.have.status(200));",
+                  "pm.test('balance returned', () => pm.expect(Number(pm.response.json().balance)).to.be.at.least(500000));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Top up the account registered in folder 1",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/admin/wallets/{{newUserId}}/top-up",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "admin",
+                "wallets",
+                "{{newUserId}}",
+                "top-up"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"amount\": 1000000\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{adminToken}}",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 200', () => pm.response.to.have.status(200));",
+                  "pm.test('balance 1,000,000', () => pm.expect(Number(pm.response.json().balance)).to.eql(1000000));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Top up with Idempotency-Key",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Idempotency-Key",
+                "value": "{{topUpKey}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/admin/wallets/{{newUserId}}/top-up",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "admin",
+                "wallets",
+                "{{newUserId}}",
+                "top-up"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"amount\": 250000\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{adminToken}}",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.collectionVariables.set('topUpKey', pm.variables.replaceIn('{{$guid}}'));"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 200', () => pm.response.to.have.status(200));",
+                  "pm.collectionVariables.set('balanceAfterTopUp', pm.response.json().balance);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Retry same top-up key → not credited twice",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Idempotency-Key",
+                "value": "{{topUpKey}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/admin/wallets/{{newUserId}}/top-up",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "admin",
+                "wallets",
+                "{{newUserId}}",
+                "top-up"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"amount\": 250000\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{adminToken}}",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 200', () => pm.response.to.have.status(200));",
+                  "pm.test('balance unchanged', () =>",
+                  "  pm.expect(Number(pm.response.json().balance)).to.eql(Number(pm.collectionVariables.get('balanceAfterTopUp'))));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Top up with amount 0 → 400",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/admin/wallets/00000000-0000-0000-0001-000000000001/top-up",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "admin",
+                "wallets",
+                "00000000-0000-0000-0001-000000000001",
+                "top-up"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"amount\": 0\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{adminToken}}",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 400', () => pm.response.to.have.status(400));",
+                  "pm.test('error code VALIDATION_FAILED', () => pm.expect(pm.response.json().code).to.eql('VALIDATION_FAILED'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Top up unknown user → 404",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/admin/wallets/{{$guid}}/top-up",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "admin",
+                "wallets",
+                "{{$guid}}",
+                "top-up"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"amount\": 1000\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{adminToken}}",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 404', () => pm.response.to.have.status(404));",
+                  "pm.test('error code USER_NOT_FOUND', () => pm.expect(pm.response.json().code).to.eql('USER_NOT_FOUND'));"
                 ]
               }
             }
           ]
         }
       ]
+    },
+    {
+      "name": "8. Authorization & errors",
+      "description": "Không token → 401, user thường gọi API admin → 403, lỗi định dạng.",
+      "item": [
+        {
+          "name": "Login as user0001",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/auth/login",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "auth",
+                "login"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"identifier\": \"user0001@flashsale.local\",\n  \"password\": \"User@12345\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "auth": {
+              "type": "noauth"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 200', () => pm.response.to.have.status(200));",
+                  "pm.collectionVariables.set('userToken', pm.response.json().accessToken);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "No token → 401",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/wallet",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "wallet"
+              ]
+            },
+            "auth": {
+              "type": "noauth"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 401', () => pm.response.to.have.status(401));",
+                  "pm.test('error code UNAUTHORIZED', () => pm.expect(pm.response.json().code).to.eql('UNAUTHORIZED'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Garbage token → 401",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/wallet",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "wallet"
+              ]
+            },
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "not.a.jwt",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 401', () => pm.response.to.have.status(401));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "User calls admin API → 403",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/admin/products",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "admin",
+                "products"
+              ]
+            },
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{userToken}}",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 403', () => pm.response.to.have.status(403));",
+                  "pm.test('error code FORBIDDEN', () => pm.expect(pm.response.json().code).to.eql('FORBIDDEN'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Path id is not a UUID → 400",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/admin/products/not-a-uuid",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "admin",
+                "products",
+                "not-a-uuid"
+              ]
+            },
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{adminToken}}",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 400', () => pm.response.to.have.status(400));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Malformed JSON body → 400",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/admin/products",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "admin",
+                "products"
+              ]
+            },
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{adminToken}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\"sku\": ",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 400', () => pm.response.to.have.status(400));",
+                  "pm.test('error code MALFORMED_REQUEST', () => pm.expect(pm.response.json().code).to.eql('MALFORMED_REQUEST'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Unknown route → 404",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/does-not-exist",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "does-not-exist"
+              ]
+            },
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{userToken}}",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 404', () => pm.response.to.have.status(404));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Errors carry a requestId",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/admin/products/{{$guid}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "admin",
+                "products",
+                "{{$guid}}"
+              ]
+            },
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{adminToken}}",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('requestId present', () => pm.expect(pm.response.json().requestId).to.be.a('string'));"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "variable": [
+    {
+      "key": "baseUrl",
+      "value": "http://localhost:8088"
+    },
+    {
+      "key": "password",
+      "value": "Secret123"
+    },
+    {
+      "key": "email",
+      "value": ""
+    },
+    {
+      "key": "otp",
+      "value": ""
+    },
+    {
+      "key": "wrongOtp",
+      "value": ""
+    },
+    {
+      "key": "registerMessage",
+      "value": ""
+    },
+    {
+      "key": "accessToken",
+      "value": ""
+    },
+    {
+      "key": "refreshToken",
+      "value": ""
+    },
+    {
+      "key": "oldRefreshToken",
+      "value": ""
+    },
+    {
+      "key": "newUserId",
+      "value": ""
+    },
+    {
+      "key": "phone",
+      "value": ""
+    },
+    {
+      "key": "phoneE164",
+      "value": ""
+    },
+    {
+      "key": "phoneSpaced",
+      "value": ""
+    },
+    {
+      "key": "adminToken",
+      "value": ""
+    },
+    {
+      "key": "userToken",
+      "value": ""
+    },
+    {
+      "key": "shopperEmail",
+      "value": ""
+    },
+    {
+      "key": "today",
+      "value": ""
+    },
+    {
+      "key": "itemId",
+      "value": ""
+    },
+    {
+      "key": "otherItemId",
+      "value": ""
+    },
+    {
+      "key": "idempotencyKey",
+      "value": ""
+    },
+    {
+      "key": "secondKey",
+      "value": ""
+    },
+    {
+      "key": "bought",
+      "value": ""
+    },
+    {
+      "key": "orderId",
+      "value": ""
+    },
+    {
+      "key": "balanceBefore",
+      "value": ""
+    },
+    {
+      "key": "sku",
+      "value": ""
+    },
+    {
+      "key": "productId",
+      "value": ""
+    },
+    {
+      "key": "slotDate",
+      "value": ""
+    },
+    {
+      "key": "slotStart",
+      "value": ""
+    },
+    {
+      "key": "slotEnd",
+      "value": ""
+    },
+    {
+      "key": "slotId",
+      "value": ""
+    },
+    {
+      "key": "slotItemId",
+      "value": ""
+    },
+    {
+      "key": "slotId2",
+      "value": ""
+    },
+    {
+      "key": "topUpKey",
+      "value": ""
+    },
+    {
+      "key": "balanceAfterTopUp",
+      "value": ""
     }
   ]
 }
