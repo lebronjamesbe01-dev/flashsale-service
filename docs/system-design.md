@@ -145,13 +145,16 @@ erDiagram
         uuid id PK
         uuid user_id FK
         uuid item_id FK
+        uuid slot_id FK
+        uuid product_id FK
         date sale_date "unique cùng user_id"
         numeric price
+        varchar idempotency_key "unique cùng user_id"
         varchar status
     }
 ```
 
-Bảng hạ tầng: `outbox` (sự kiện chờ gửi), `processed_events` (sự kiện đã xử lý, chống trùng), `notification_outbox` (mock gửi OTP).
+Bảng hạ tầng: `outbox` (sự kiện chờ gửi), `processed_events` (sự kiện đã xử lý, chống trùng), `notification_outbox` (mock gửi OTP), `refresh_tokens` (hash refresh token).
 
 **Ràng buộc cứng — tuyến phòng thủ cuối cùng**
 
@@ -170,14 +173,15 @@ Bảng hạ tầng: `outbox` (sự kiện chờ gửi), `processed_events` (sự
 
 | Key | Giá trị | TTL | Dùng cho |
 |---|---|---|---|
-| `fs:stock:{itemId}` | số suất còn lại | đến hết slot | Cổng chặn: hết suất thì từ chối ngay |
-| `fs:bought:{yyyyMMdd}:{userId}` | itemId đã mua | hết ngày + 1h | Cổng chặn: hôm nay mua rồi |
-| `otp:{type}:{identifier}` | hash OTP + số lần sai | 5 phút | Xác thực OTP |
+| `fs:stock:{itemId}` | số suất còn lại cổng cho qua | đến hết slot + 1h | Hết suất thì từ chối ngay, không chạm DB |
+| `fs:bought:{yyyy-MM-dd}:{userId}` | itemId đã mua | 60s khi đang mua, kéo đến hết ngày sau khi commit | Hôm nay đã mua thì từ chối ngay |
+| `purchase:lock:{userId}:{key}` | 1 | 30s | Request trùng `Idempotency-Key` đang chạy song song |
+| `otp:{identifier}` | hash `{code: HMAC, attempts}` | 5 phút | Xác thực OTP |
 | `otp:cooldown:{identifier}` | 1 | 60 giây | Chặn gửi lại OTP liên tục |
 | `jwt:deny:{jti}` | 1 | thời gian còn lại của token | Token đã logout |
-| `idem:{userId}:{key}` | kết quả request | 24h | Chống bấm mua 2 lần |
-| `rl:{scope}:{ip/identifier}` | bucket | theo cửa sổ | Rate limit |
-| `fs:current` | JSON danh sách đang sale | 2 giây | Cache API xem danh sách |
+| `rl:{rule}:{ip/identifier/user}` | bộ đếm | theo cửa sổ | Rate limit |
+
+Redis mất dữ liệu cũng không làm sai: số suất và quyền mua được DB quyết định, các key trên chỉ để lọc tải và tự được đối soát lại.
 
 ---
 
@@ -197,10 +201,10 @@ sequenceDiagram
     API->>R: Rate limit theo IP + identifier
     API->>S: register()
     S->>DB: Tìm user theo identifier
-    alt Đã ACTIVE
-        S-->>API: Không làm gì (không lộ là đã tồn tại)
-    else Mới hoặc còn PENDING
-        S->>DB: Upsert user PENDING + BCrypt(password)
+    alt Đã ACTIVE, hoặc PENDING mà OTP cũ còn hiệu lực
+        S-->>API: Không làm gì (không lộ là đã tồn tại, không cho đổi mật khẩu)
+    else Mới, hoặc PENDING và OTP cũ đã hết hạn
+        S->>DB: INSERT user PENDING ON CONFLICT DO NOTHING (BCrypt)
         S->>R: Lưu HMAC(OTP), attempts=0, TTL 5 phút
         S->>DB: Ghi notification_outbox (mock gửi, log OTP ở profile dev)
     end
@@ -209,7 +213,7 @@ sequenceDiagram
     U->>API: POST /auth/verify-otp {identifier, otp}
     API->>R: Lấy OTP, so sánh constant-time
     alt Đúng
-        API->>DB: status = ACTIVE, tạo wallet balance 0
+        API->>DB: status = ACTIVE (chỉ khi đang PENDING), mở ví số dư 0
         API->>R: Xoá OTP
         API-->>U: 200 Đã kích hoạt
     else Sai
@@ -260,46 +264,52 @@ sequenceDiagram
     autonumber
     actor U as User
     participant C as PurchaseController
-    participant UC as PurchaseUseCase
-    participant RL as Rules
+    participant P as PurchaseService
     participant R as Redis
     participant DB as Postgres
 
     U->>C: POST /flash-sale/items/{id}/purchase<br/>Idempotency-Key: abc
-    C->>R: SET NX idem:{user}:abc
-    C->>UC: purchase(user, item)
-    UC->>RL: SlotActive, ItemInActiveSlot, UserActive
-    UC->>R: Lua try_acquire(item, user, date)
-    Note over R: Nguyên tử, không ai chen ngang:<br/>đã mua hôm nay? còn suất?<br/>nếu ổn: DECR stock, SET cờ đã mua
-    R-->>UC: OK
-    UC->>DB: BEGIN
-    UC->>DB: UPDATE items SET sold=sold+1 WHERE id=? AND sold < quota
-    UC->>DB: UPDATE wallets SET balance=balance-price WHERE user=? AND balance>=price
-    UC->>DB: INSERT flash_orders (unique user_id + sale_date)
-    UC->>DB: INSERT wallet_transactions
-    UC->>DB: INSERT outbox (order.placed)
-    UC->>DB: COMMIT
-    UC-->>C: orderId, balanceAfter
-    C->>R: Lưu kết quả vào idem:{user}:abc
-    C-->>U: 201 Created
+    C->>R: Rate limit theo user
+    C->>P: purchase(user, item, abc)
+    P->>R: SET NX purchase:lock:{user}:abc (30s)
+    P->>P: Item đang trong khung giờ? (cache 1s)
+    P->>R: Lua admit(item, user, ngày)
+    Note over R: Nguyên tử: đã mua hôm nay? còn suất?<br/>nếu ổn: DECR stock, SET cờ đã mua (60s)
+    R-->>P: ADMITTED
+    P->>DB: BEGIN (timeout 5s)
+    P->>DB: INSERT flash_orders ... ON CONFLICT DO NOTHING
+    P->>DB: UPDATE wallets SET balance = balance - price WHERE balance >= price
+    P->>DB: INSERT wallet_transactions, INSERT outbox (order.placed)
+    P->>DB: UPDATE flash_sale_items SET sold = sold + 1 WHERE sold < quota AND slot đang mở
+    P->>DB: COMMIT
+    P->>R: Kéo cờ đã mua đến hết ngày, mở khoá
+    C-->>U: 201 Created {order, balanceAfter}
 ```
 
-### 7.2 Mọi nhánh rẽ (thất bại và bù trừ)
+Câu `sold = sold + 1` để cuối cùng: dòng của sản phẩm đang sale là dòng bị tranh chấp nhiều nhất, khoá nó càng muộn thì thời gian giữ khoá càng ngắn.
+
+### 7.2 Mọi nhánh rẽ
 
 ```mermaid
 flowchart TD
-    S([Request mua]) --> I{"Idempotency-Key<br/>đã xử lý?"}
-    I -- "có" --> IR["Trả lại kết quả cũ"]
-    I -- "chưa" --> RULE{"Đang trong khung giờ?<br/>Item thuộc slot đang mở?"}
-    RULE -- "không" --> E1["400 SLOT_NOT_ACTIVE"]
-    RULE -- "có" --> LUA{"Redis Lua"}
-    LUA -- "đã mua hôm nay" --> E2["409 ALREADY_PURCHASED_TODAY"]
+    S([Request mua]) --> K{"Có Idempotency-Key hợp lệ?"}
+    K -- "không" --> E0["400 IDEMPOTENCY_KEY_REQUIRED"]
+    K -- "có" --> L{"Khoá (user, key)"}
+    L -- "đang có request khác giữ" --> E1["409 PURCHASE_IN_PROGRESS"]
+    L -- "được" --> A{"Khung giờ đang mở?"}
+    A -- "không" --> E2["409 FLASH_SALE_NOT_ACTIVE"]
+    A -- "có" --> LUA{"Redis Lua"}
     LUA -- "hết suất" --> E3["409 SOLD_OUT"]
-    LUA -- "OK, đã giữ 1 suất" --> TX["Transaction Postgres"]
-    TX -- "sold < quota sai" --> RB1["Rollback"] --> COMP["Lua release:<br/>trả 1 suất, xoá cờ đã mua"] --> E3b["409 SOLD_OUT"]
-    TX -- "không đủ tiền" --> RB2["Rollback"] --> COMP2["Lua release"] --> E4["402 INSUFFICIENT_BALANCE"]
-    TX -- "trùng unique user+ngày" --> RB3["Rollback"] --> E2b["409 ALREADY_PURCHASED_TODAY"]
-    TX -- "commit" --> OK["201 Created + event order.placed vào outbox"]
+    LUA -- "đã mua hôm nay" --> RP{"Key này đã tạo đơn?"}
+    RP -- "cùng sản phẩm" --> OK2["200 trả lại đơn cũ"]
+    RP -- "khác sản phẩm" --> E5["422 IDEMPOTENCY_KEY_REUSED"]
+    RP -- "không" --> E4["409 ALREADY_PURCHASED_TODAY"]
+    LUA -- "cho qua" --> TX["Transaction Postgres"]
+    TX -- "trùng (user, ngày)" --> RP
+    TX -- "không đủ tiền" --> R1["Rollback, trả suất cho Redis"] --> E6["409 INSUFFICIENT_BALANCE"]
+    TX -- "sold < quota sai" --> R2["Rollback, đặt counter Redis = 0"] --> E3
+    TX -- "hết kết nối / quá 5s" --> E7["503 SERVICE_BUSY"]
+    TX -- "commit" --> OK["201 Created"]
 ```
 
 ### 7.3 Vì sao không bao giờ bán quá
@@ -307,23 +317,26 @@ flowchart TD
 ```mermaid
 flowchart LR
     REQ["10.000 request<br/>tranh 100 suất"] --> G1["Lớp 1 — Redis Lua<br/>chỉ ~100 request lọt qua"]
-    G1 --> G2["Lớp 2 — Postgres<br/>UPDATE ... WHERE sold < quota<br/>+ check constraint"]
-    G2 --> G3["Lớp 3 — unique index<br/>user_id + sale_date"]
+    G1 --> G2["Lớp 2 — Postgres<br/>sold < quota dưới row lock<br/>+ CHECK sold <= quota"]
+    G2 --> G3["Lớp 3 — unique<br/>user_id + sale_date"]
     G3 --> OK["Đúng 100 đơn<br/>mỗi user tối đa 1 đơn/ngày"]
 ```
 
-- Lớp 1 để **nhanh**: 9.900 request bị từ chối trong RAM, Postgres không phải gánh.
-- Lớp 2, 3 để **đúng**: kể cả Redis lệch số (app chết giữa chừng, Redis restart), Postgres vẫn từ chối phần vượt.
-- Không dùng `synchronized` hay lock trong JVM — vô dụng khi chạy nhiều instance. Không dùng distributed lock — chậm và không cần, vì thao tác nguyên tử đã đủ.
+- Lớp 1 để **nhanh**: request hết hy vọng bị từ chối trong RAM, Postgres không phải gánh.
+- Lớp 2, 3 để **đúng**: Redis lệch số thế nào (instance chết giữa chừng, Redis restart, Redis chết hẳn), Postgres vẫn từ chối phần vượt. Có test cố tình đặt counter Redis = 100000 để chứng minh.
+- Không dùng `synchronized` hay lock trong JVM — vô dụng khi chạy nhiều instance. Không dùng distributed lock — các câu lệnh đã nguyên tử.
 
 ### 7.4 Sự cố và cách xử lý
 
 | Sự cố | Hệ quả | Xử lý |
 |---|---|---|
-| App chết sau khi Redis đã giữ suất, trước khi commit DB | Redis thiếu 1 suất (bán thiếu, **không** bán thừa) | `StockReconciler` định kỳ đặt lại `fs:stock = quota - sold` |
-| Redis chết | Không có cổng chặn | Chuyển sang chỉ dùng Postgres (chậm hơn nhưng vẫn đúng) |
-| Client bấm mua 2 lần / mạng retry | Có thể tạo 2 request | `Idempotency-Key` trả lại kết quả lần đầu |
-| Qua nửa đêm giữa khung giờ | Lệch `sale_date` | Admin không được tạo slot vắt qua 00:00 |
+| Instance chết sau khi Redis cho qua, trước khi commit | Redis thiếu 1 suất; user có cờ "đã mua" nhưng không có đơn | Cờ chỉ sống 60s nếu chưa commit. `StockReconciler` (60s/lần, mọi instance) ghi đè `fs:stock = quota - sold` |
+| Redis chết | Không có cổng chặn | Bỏ qua khoá, cổng và rate limit; DB tự quyết. Chậm hơn nhưng vẫn đúng |
+| Redis đếm cao hơn thực tế | Thêm request vào tới DB | DB từ chối, counter Redis được đặt về 0 ngay |
+| Bấm mua 2 lần / client retry | 2 request cùng key | Khoá Redis + unique `(user_id, idempotency_key)`; lần sau nhận lại đơn cũ |
+| DB quá tải | Hết kết nối trong 3s | 503 + `Retry-After: 1` thay vì 500 |
+| Admin đóng slot giữa lúc có người mua | Có thể trả kho sai | Đóng slot = `UPDATE ... SET quota = sold RETURNING old.quota - old.sold` dưới row lock; ai mua sau đó thấy hết hàng |
+| Qua nửa đêm | Lệch `sale_date` | Khung giờ không được vắt qua 00:00; ngày được chốt một lần mỗi request |
 
 ---
 
@@ -334,26 +347,26 @@ flowchart LR
 ```mermaid
 sequenceDiagram
     autonumber
-    participant UC as PurchaseUseCase
+    participant UC as PurchaseService
     participant DB as Postgres
     participant RL as OutboxRelay (mọi instance)
     participant MQ as RabbitMQ
-    participant L as InventoryListener
+    participant L as Inventory consumer
 
     UC->>DB: Cùng transaction với đơn hàng:<br/>INSERT outbox(order.placed)
     loop Mỗi ~200ms
         RL->>DB: SELECT outbox chưa gửi<br/>FOR UPDATE SKIP LOCKED LIMIT 100
-        RL->>MQ: Publish (persistent, message_id = event_id)
-        MQ-->>RL: Publisher confirm (đã nhận)
-        RL->>DB: published_at = now()
+        RL->>MQ: Gửi cả lô (persistent, message_id = event_id)
+        MQ-->>RL: Publisher confirms
+        RL->>DB: published_at = now() cho các sự kiện được xác nhận
     end
-    MQ->>L: Giao tin từ queue inventory.events
+    MQ->>L: Giao tin từ queue inventory.order-events
     L->>DB: BEGIN
     L->>DB: INSERT processed_events(consumer, event_id)<br/>ON CONFLICT DO NOTHING
     alt Đã xử lý trước đó (0 row)
         L->>DB: COMMIT, bỏ qua
     else Lần đầu
-        L->>DB: UPDATE inventory SET on_hand=on_hand-1, reserved=reserved-1
+        L->>DB: UPDATE inventory SET on_hand = on_hand - 1, reserved = reserved - 1
         L->>DB: COMMIT
     end
     L-->>MQ: ACK
@@ -364,22 +377,29 @@ sequenceDiagram
 ```mermaid
 flowchart LR
     P["OutboxRelay"] --> EX{{"exchange flashsale.events<br/>(topic)"}}
-    EX -- "order.* slot.* product.*" --> Q["queue inventory.events<br/>(quorum, delivery-limit 5)"]
-    Q --> L["InventoryListener"]
-    Q -- "lỗi quá 5 lần" --> DLX{{"exchange flashsale.dlx"}}
-    DLX --> DLQ["queue inventory.events.dlq<br/>(soi tay)"]
+    EX -- "order.placed" --> Q1["inventory.order-events<br/>(quorum)"]
+    EX -- "product.deactivated" --> Q2["flashsale.product-events<br/>(quorum)"]
+    Q1 --> L1["Inventory consumer"]
+    Q2 --> L2["Flash sale consumer"]
+    Q1 -- "hết lượt thử" --> DLX{{"flashsale.dlx"}}
+    Q2 -- "hết lượt thử" --> DLX
+    DLX --> DLQ["flashsale.dead-letters"]
 ```
+
+Consumer lỗi được thử lại trong ứng dụng sau 1s, 3s, 9s (đủ để qua một lần DB khởi động lại); vẫn lỗi thì tin bị từ chối và chuyển sang `flashsale.dead-letters` để xem và chuyển lại thủ công.
 
 ### 8.3 Sự kiện và tác động
 
 | Sự kiện | Khi nào | Tồn kho thay đổi |
 |---|---|---|
+| (đồng bộ) thêm sản phẩm vào khung giờ | Admin | `reserved + quota`, từ chối nếu `on_hand - reserved < quota` |
+| (đồng bộ) đóng khung giờ | Admin hoặc job tự đóng khi hết giờ | `reserved - (quota - sold)`, chốt `quota = sold` |
 | `order.placed` | Mua thành công | `on_hand - 1`, `reserved - 1` |
-| `slot.closed` | Hết khung giờ / admin đóng | `reserved - (quota - sold)` (trả suất chưa bán về kho) |
-| `product.deactivated` | Admin ngừng bán | Gỡ khỏi slot chưa bắt đầu, trả `reserved` |
-| `inventory.adjusted` | Admin nhập/xuất kho | Ghi nhận (kiểm `on_hand >= reserved` làm ngay lúc admin sửa) |
+| `product.deactivated` | Admin ngừng bán sản phẩm | Gỡ khỏi các khung giờ chưa mở, `reserved - quota` |
 
-**Vì sao "không trùng, nhất quán"**: outbox ghi cùng transaction ⇒ không mất sự kiện. Relay có thể gửi lại (ít nhất 1 lần) ⇒ consumer chống trùng bằng `processed_events` ⇒ kết quả **đúng 1 lần**.
+Tổng cho mỗi khung giờ: giữ `Q` → bán `S` (trả qua sự kiện) → đóng (trả `Q - S`) → `reserved` về 0, thứ tự nào cũng ra cùng kết quả.
+
+**Vì sao "không trùng, nhất quán"**: outbox ghi cùng transaction ⇒ không mất và không thừa sự kiện. Relay gửi ít nhất 1 lần ⇒ consumer chống trùng bằng `processed_events` trong chính transaction của nó ⇒ tác động xảy ra **đúng 1 lần**.
 
 ---
 
@@ -390,8 +410,9 @@ stateDiagram-v2
     direction LR
     state "Khung giờ flash sale" as SLOT {
         [*] --> DRAFT: admin tạo
-        DRAFT --> PUBLISHED: publish (nạp stock vào Redis)
-        PUBLISHED --> CLOSED: hết giờ / admin đóng (event slot.closed)
+        DRAFT --> PUBLISHED: publish (không được chồng giờ slot khác)
+        PUBLISHED --> CLOSED: hết giờ (job tự đóng) / admin đóng, trả kho phần chưa bán
+        DRAFT --> CLOSED: admin huỷ bản nháp
         CLOSED --> [*]
     }
 ```
