@@ -1,0 +1,99 @@
+name: flashsale
+
+# One command to run everything: docker compose up -d --build
+# Multi-instance demo:            docker compose up -d --build --scale app=2
+# The API is reached through nginx at http://localhost:${APP_PORT:-8088}
+
+x-app-env: &app-env
+  SPRING_PROFILES_ACTIVE: ${SPRING_PROFILES_ACTIVE:-demo}
+  JWT_SECRET: ${JWT_SECRET:-compose-demo-jwt-secret-0123456789abcdefghij}
+  OTP_HMAC_KEY: ${OTP_HMAC_KEY:-compose-demo-otp-hmac-key-0123456789abcdef}
+  DB_URL: jdbc:postgresql://postgres:5432/${POSTGRES_DB:-flashsale}
+  DB_USER: ${POSTGRES_USER:-flashsale}
+  DB_PASSWORD: ${POSTGRES_PASSWORD:-flashsale}
+  REDIS_HOST: redis
+  REDIS_PORT: 6379
+  RABBITMQ_HOST: rabbitmq
+  RABBITMQ_PORT: 5672
+  RABBITMQ_USER: ${RABBITMQ_USER:-flashsale}
+  RABBITMQ_PASSWORD: ${RABBITMQ_PASSWORD:-flashsale}
+
+services:
+  postgres:
+    image: postgres:18.6-alpine
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-flashsale}
+      POSTGRES_USER: ${POSTGRES_USER:-flashsale}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-flashsale}
+    ports:
+      - "127.0.0.1:${POSTGRES_PORT:-15432}:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    mem_limit: 512m
+
+  redis:
+    image: redis:8.8.4-alpine
+    command: ["redis-server", "--appendonly", "yes", "--maxmemory", "200mb", "--maxmemory-policy", "noeviction"]
+    ports:
+      - "127.0.0.1:${REDIS_PORT:-16379}:6379"
+    volumes:
+      - redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    mem_limit: 256m
+
+  rabbitmq:
+    image: rabbitmq:4.4.0-management-alpine
+    environment:
+      RABBITMQ_DEFAULT_USER: ${RABBITMQ_USER:-flashsale}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD:-flashsale}
+    ports:
+      - "127.0.0.1:${RABBITMQ_PORT:-15673}:5672"
+      - "127.0.0.1:${RABBITMQ_UI_PORT:-15672}:15672"
+    volumes:
+      - rabbitdata:/var/lib/rabbitmq
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+    mem_limit: 512m
+
+  app:
+    build: .
+    image: flashsale-service:local
+    environment:
+      <<: *app-env
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    stop_grace_period: 35s
+    mem_limit: 768m
+
+  nginx:
+    image: nginx:1.31.8-alpine
+    ports:
+      - "${APP_PORT:-8088}:80"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+    depends_on:
+      app:
+        condition: service_healthy
+    mem_limit: 64m
+
+volumes:
+  pgdata:
+  redisdata:
+  rabbitdata:
