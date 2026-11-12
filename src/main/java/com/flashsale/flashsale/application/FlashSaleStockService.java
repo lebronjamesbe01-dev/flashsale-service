@@ -12,6 +12,8 @@ import java.time.Duration;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.util.UUID;
+import java.util.function.Supplier;
+import org.springframework.dao.DataAccessException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
@@ -63,11 +65,18 @@ public class FlashSaleStockService {
      * the counter is seeded from the database ({@code quota - sold}).
      */
     public void admit(PurchasableItem item, UUID userId, LocalDate saleDate) {
-        Admission admission = gate.tryAdmit(item.itemId(), userId, saleDate, PENDING_FLAG_TTL);
+        Admission admission =
+                viaRedis(() -> gate.tryAdmit(item.itemId(), userId, saleDate, PENDING_FLAG_TTL));
         if (admission == Admission.NOT_INITIALIZED) {
+            // The database read sits OUTSIDE viaRedis on purpose: a DB failure here must surface as
+            // a database error (503), not be mistaken for "Redis is down" and skip the gate.
             int remaining = items.find(item.itemId()).map(ItemSnapshot::remaining).orElse(0);
-            gate.initialize(item.itemId(), remaining, untilSlotEnd(item.slotEnd()));
-            admission = gate.tryAdmit(item.itemId(), userId, saleDate, PENDING_FLAG_TTL);
+            admission =
+                    viaRedis(() -> {
+                        gate.initialize(
+                                item.itemId(), remaining, stockKeyTtl(clock.now(), item.slotEnd()));
+                        return gate.tryAdmit(item.itemId(), userId, saleDate, PENDING_FLAG_TTL);
+                    });
         }
         switch (admission) {
             case ADMITTED -> {}
@@ -83,13 +92,14 @@ public class FlashSaleStockService {
         gate.confirm(userId, saleDate, untilEndOfDay(saleDate));
     }
 
-    public void cancelAdmission(
+    /** The purchase failed: give the unit back; optionally drop the user's pending daily flag. */
+    public void releaseAdmission(
             UUID itemId, UUID userId, LocalDate saleDate, boolean clearDailyFlag) {
         gate.release(itemId, userId, saleDate, clearDailyFlag);
     }
 
     /** The database refused because nothing is left: close the gate for this item. */
-    public void cancelAdmissionSoldOut(UUID itemId, UUID userId, LocalDate saleDate) {
+    public void closeGate(UUID itemId, UUID userId, LocalDate saleDate) {
         gate.markSoldOut(itemId, userId, saleDate);
     }
 
@@ -108,8 +118,25 @@ public class FlashSaleStockService {
         return positive(Duration.between(clock.now(), endOfDay).plus(GRACE));
     }
 
-    private Duration untilSlotEnd(Instant slotEnd) {
-        return positive(Duration.between(clock.now(), slotEnd).plus(GRACE));
+    /** Lifetime for an item's Redis counter: until the slot ends, plus a grace period. */
+    static Duration stockKeyTtl(Instant now, Instant slotEnd) {
+        return positive(Duration.between(now, slotEnd).plus(GRACE));
+    }
+
+    /** Runs Redis-only work; any Redis failure becomes {@link GateUnavailableException}. */
+    private static <T> T viaRedis(Supplier<T> redisCall) {
+        try {
+            return redisCall.get();
+        } catch (DataAccessException e) {
+            throw new GateUnavailableException(e);
+        }
+    }
+
+    /** The Redis gate cannot be used; the caller may continue with database checks only. */
+    public static class GateUnavailableException extends RuntimeException {
+        GateUnavailableException(Throwable cause) {
+            super("Stock gate unavailable", cause);
+        }
     }
 
     private static Duration positive(Duration duration) {

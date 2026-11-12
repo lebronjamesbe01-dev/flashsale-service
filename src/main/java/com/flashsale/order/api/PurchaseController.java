@@ -9,6 +9,7 @@ import com.flashsale.shared.ratelimit.RateLimiter;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.Parameter;
 import io.swagger.v3.oas.annotations.tags.Tag;
+import java.math.BigDecimal;
 import java.time.Duration;
 import java.util.List;
 import java.util.UUID;
@@ -69,5 +70,5 @@ class PurchaseController {
     }
 
     /** {@code balanceAfter} is null on a replayed response. */
-    record PurchaseResponse(OrderView order, java.math.BigDecimal balanceAfter) {}
+    record PurchaseResponse(OrderView order, BigDecimal balanceAfter) {}
 }

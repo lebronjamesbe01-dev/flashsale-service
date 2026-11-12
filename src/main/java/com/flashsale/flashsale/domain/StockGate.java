@@ -27,8 +27,8 @@ public interface StockGate {
     /** The database says nothing is left: stop admitting anyone for this item. */
     void markSoldOut(UUID itemId, UUID userId, LocalDate saleDate);
 
-    /** Creates the counter if missing. Returns false when another request created it first. */
-    boolean initialize(UUID itemId, int remaining, Duration ttl);
+    /** Creates the counter if missing (no-op when another request created it first). */
+    void initialize(UUID itemId, int remaining, Duration ttl);
 
     /** Overwrites the counter with the database value (used by the periodic reconciler). */
     void overwrite(UUID itemId, int remaining, Duration ttl);

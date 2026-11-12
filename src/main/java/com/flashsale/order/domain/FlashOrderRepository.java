@@ -1,5 +1,6 @@
 package com.flashsale.order.domain;
 
+import java.time.LocalDate;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
@@ -31,6 +32,8 @@ public interface FlashOrderRepository extends JpaRepository<FlashOrder, UUID> {
     int insertIfFirstToday(@Param("o") FlashOrder order, @Param("key") String idempotencyKey);
 
     Optional<FlashOrder> findByUserIdAndIdempotencyKey(UUID userId, String idempotencyKey);
+
+    boolean existsByUserIdAndSaleDate(UUID userId, LocalDate saleDate);
 
     List<FlashOrder> findTop50ByUserIdOrderByCreatedAtDesc(UUID userId);
 }

@@ -42,7 +42,7 @@ class StockReconciler {
         Instant now = clock.now();
         try {
             for (ItemSnapshot item : items.findOpen(now)) {
-                Duration ttl = Duration.between(now, item.slotEnd()).plusHours(1);
+                Duration ttl = FlashSaleStockService.stockKeyTtl(now, item.slotEnd());
                 gate.overwrite(item.itemId(), item.remaining(), ttl);
             }
         } catch (DataAccessException e) {

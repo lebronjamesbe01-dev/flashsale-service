@@ -108,9 +108,8 @@ class RedisStockGate implements StockGate {
     }
 
     @Override
-    public boolean initialize(UUID itemId, int remaining, Duration ttl) {
-        return Boolean.TRUE.equals(
-                redis.opsForValue().setIfAbsent(stockKey(itemId), String.valueOf(remaining), ttl));
+    public void initialize(UUID itemId, int remaining, Duration ttl) {
+        redis.opsForValue().setIfAbsent(stockKey(itemId), String.valueOf(remaining), ttl);
     }
 
     @Override

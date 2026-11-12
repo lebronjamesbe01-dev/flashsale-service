@@ -1,6 +1,7 @@
 package com.flashsale.order.application;
 
 import com.flashsale.flashsale.application.FlashSaleStockService;
+import com.flashsale.flashsale.application.FlashSaleStockService.GateUnavailableException;
 import com.flashsale.flashsale.application.FlashSaleStockService.PurchasableItem;
 import com.flashsale.order.domain.FlashOrder;
 import com.flashsale.order.domain.FlashOrderRepository;
@@ -9,14 +10,15 @@ import com.flashsale.outbox.application.Events;
 import com.flashsale.outbox.application.OutboxWriter;
 import com.flashsale.shared.error.BusinessException;
 import com.flashsale.shared.error.ErrorCode;
+import com.flashsale.shared.logging.ThrottledWarning;
 import com.flashsale.shared.time.BusinessClock;
 import com.flashsale.wallet.application.WalletService;
 import java.math.BigDecimal;
+import java.time.Duration;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.util.List;
 import java.util.UUID;
-import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.dao.DataAccessException;
 import org.springframework.stereotype.Service;
@@ -47,7 +49,11 @@ import org.springframework.transaction.support.TransactionTemplate;
 @Service
 public class PurchaseService {
 
-    private static final Logger log = LoggerFactory.getLogger(PurchaseService.class);
+    /** Redis fail-open paths: one line per 30 s during an outage, not one per request. */
+    private static final ThrottledWarning redisDown =
+            new ThrottledWarning(
+                    LoggerFactory.getLogger(PurchaseService.class), Duration.ofSeconds(30));
+
     private static final int TRANSACTION_TIMEOUT_SECONDS = 5;
 
     private final FlashOrderRepository orders;
@@ -56,6 +62,7 @@ public class PurchaseService {
     private final WalletService wallets;
     private final OutboxWriter outbox;
     private final BusinessClock clock;
+    private final List<PurchaseRule> rules;
     private final TransactionTemplate transaction;
 
     public PurchaseService(
@@ -65,6 +72,7 @@ public class PurchaseService {
             WalletService wallets,
             OutboxWriter outbox,
             BusinessClock clock,
+            List<PurchaseRule> rules,
             PlatformTransactionManager transactionManager) {
         this.orders = orders;
         this.lock = lock;
@@ -72,6 +80,7 @@ public class PurchaseService {
         this.wallets = wallets;
         this.outbox = outbox;
         this.clock = clock;
+        this.rules = List.copyOf(rules);
         this.transaction = new TransactionTemplate(transactionManager);
         this.transaction.setTimeout(TRANSACTION_TIMEOUT_SECONDS);
     }
@@ -82,7 +91,7 @@ public class PurchaseService {
             return purchaseOnce(userId, itemId, idempotencyKey);
         } finally {
             if (locked) {
-                unlockQuietly(userId, idempotencyKey);
+                quietly(() -> lock.unlock(userId, idempotencyKey));
             }
         }
     }
@@ -97,6 +106,9 @@ public class PurchaseService {
         Instant now = clock.now();
         LocalDate saleDate = clock.dateOf(now);
         PurchasableItem item = stock.requireOnSale(itemId, now);
+        for (PurchaseRule rule : rules) {
+            rule.check(userId, item, saleDate);
+        }
 
         boolean admitted;
         try {
@@ -113,17 +125,17 @@ public class PurchaseService {
             result =
                     transaction.execute(
                             tx -> placeOrder(userId, item, saleDate, idempotencyKey, now));
-        } catch (BusinessException e) {
-            if (admitted) {
-                undoAdmission(e.code(), item.itemId(), userId, saleDate);
-            }
-            if (e.code() == ErrorCode.ALREADY_PURCHASED_TODAY) {
-                return replayOr(e, userId, itemId, idempotencyKey);
-            }
-            throw e;
         } catch (RuntimeException e) {
+            BusinessException business = e instanceof BusinessException b ? b : null;
             if (admitted) {
-                quietly(() -> stock.cancelAdmission(item.itemId(), userId, saleDate, true));
+                undoAdmission(
+                        business == null ? ErrorCode.INTERNAL_ERROR : business.code(),
+                        item.itemId(),
+                        userId,
+                        saleDate);
+            }
+            if (business != null && business.code() == ErrorCode.ALREADY_PURCHASED_TODAY) {
+                return replayOr(business, userId, itemId, idempotencyKey);
             }
             throw e;
         }
@@ -187,22 +199,43 @@ public class PurchaseService {
                 .orElseThrow(() -> alreadyBought);
     }
 
+    /** The transaction rolled back after the gate admitted us: repair the Redis state. */
     private void undoAdmission(ErrorCode reason, UUID itemId, UUID userId, LocalDate saleDate) {
         switch (reason) {
             case SOLD_OUT, FLASH_SALE_NOT_ACTIVE ->
-                    quietly(() -> stock.cancelAdmissionSoldOut(itemId, userId, saleDate));
-            case ALREADY_PURCHASED_TODAY ->
-                    quietly(() -> stock.cancelAdmission(itemId, userId, saleDate, false));
-            default -> quietly(() -> stock.cancelAdmission(itemId, userId, saleDate, true));
+                    quietly(() -> stock.closeGate(itemId, userId, saleDate));
+            case ALREADY_PURCHASED_TODAY -> {
+                // The conflict is either "user has an order today" or "this Idempotency-Key was
+                // used before" (an older day). Only the database can tell which.
+                Boolean boughtToday = boughtToday(userId, saleDate);
+                quietly(() ->
+                        stock.releaseAdmission(
+                                itemId, userId, saleDate, Boolean.FALSE.equals(boughtToday)));
+                if (Boolean.TRUE.equals(boughtToday)) {
+                    // Flag was pending (60 s) or missing after a Redis outage: make it last.
+                    quietly(() -> stock.confirmAdmission(userId, saleDate));
+                }
+            }
+            default -> quietly(() -> stock.releaseAdmission(itemId, userId, saleDate, true));
         }
     }
 
+    /** Null when the database cannot answer: then the short pending flag is left to expire. */
+    private Boolean boughtToday(UUID userId, LocalDate saleDate) {
+        try {
+            return orders.existsByUserIdAndSaleDate(userId, saleDate);
+        } catch (DataAccessException e) {
+            return null;
+        }
+    }
+
+    /** Only a Redis failure means "no gate"; database errors from the seed read propagate. */
     private boolean admitOrSkip(PurchasableItem item, UUID userId, LocalDate saleDate) {
         try {
             stock.admit(item, userId, saleDate);
             return true;
-        } catch (DataAccessException redisDown) {
-            log.warn("Stock gate unavailable, falling back to database checks only");
+        } catch (GateUnavailableException e) {
+            redisDown.warn("Stock gate unavailable ({}), using database checks only", e.getCause());
             return false;
         }
     }
@@ -220,16 +253,13 @@ public class PurchaseService {
         return true;
     }
 
-    private void unlockQuietly(UUID userId, String idempotencyKey) {
-        quietly(() -> lock.unlock(userId, idempotencyKey));
-    }
-
     /** Redis clean-up must never turn a finished purchase into an error; the gate self-heals. */
     private static void quietly(Runnable redisCall) {
         try {
             redisCall.run();
         } catch (DataAccessException e) {
-            log.warn("Redis clean-up skipped ({}); keys expire or are reconciled", e.getMessage());
+            redisDown.warn(
+                    "Redis clean-up skipped ({}); keys expire or are reconciled", e.getMessage());
         }
     }
 

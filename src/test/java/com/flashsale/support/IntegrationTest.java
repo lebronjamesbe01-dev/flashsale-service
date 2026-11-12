@@ -21,5 +21,5 @@ import org.springframework.context.annotation.Import;
             "app.auth.otp-hmac-key=test-only-otp-hmac-key-0123456789abcdefghij"
         })
 @AutoConfigureMockMvc
-@Import(TestcontainersConfiguration.class)
+@Import({TestcontainersConfiguration.class, BlockedShoppersRule.class})
 public @interface IntegrationTest {}
