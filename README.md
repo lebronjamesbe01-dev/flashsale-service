@@ -236,6 +236,12 @@ Nếu Redis đếm sai, hoặc ngừng hoạt động hẳn, hai lớp trong dat
 
 Bước "tăng số đã bán" được đặt cuối cùng trong giao dịch. Như vậy dòng dữ liệu của sản phẩm đang sale, chỗ bị tranh chấp nhiều nhất, chỉ bị khoá trong thời gian rất ngắn.
 
+### Cache trong bộ nhớ
+
+- **Trang "đang sale" (`GET /flash-sale/current`)** được mỗi instance cache 1 giây. Lúc mở bán, người dùng tải lại trang liên tục. Không có cache thì mỗi lần tải tốn 3 query và một kết nối database mà luồng mua đang cần. Có cache thì mỗi instance chỉ đọc database khoảng 1 lần mỗi giây; khi cache hết hạn chỉ 1 request đi đọc, các request khác chờ dùng chung kết quả. Số lượng còn lại hiển thị có thể trễ tối đa 1 giây. Việc mua được hay không vẫn do Redis và database quyết định lúc mua, không dựa vào màn hình.
+- **Thông tin sản phẩm ở luồng mua** (giá, khung giờ) cũng được cache 1 giây, vì không đổi được khi khung giờ đã mở.
+- **Không warm up trước giờ mở bán**, có chủ đích. Cache chỉ trống trong vài mili giây đầu, cho tới khi query đầu tiên trả về. Bộ đếm suất trên Redis được nạp ở lượt mua đầu tiên bằng lệnh chỉ ghi khi chưa có, nên nhiều request cùng nạp cũng không sai. Một job warm up phải lo thêm các trường hợp admin sửa hoặc huỷ khung giờ sát giờ, nhiều instance cùng chạy job, app khởi động lại đúng lúc mở bán, trong khi chỉ lợi được vài mili giây đầu.
+
 ### Những tình huống không suôn sẻ
 
 | Tình huống | Hệ thống xử lý |

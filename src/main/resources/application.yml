@@ -91,6 +91,9 @@ app:
     otp-resend-cooldown: 60s
   rate-limit:
     enabled: ${RATE_LIMIT_ENABLED:true}
+  flash-sale:
+    # How long each instance reuses the "open slot" answer of GET /flash-sale/current.
+    current-cache-ttl: 1s
 
 logging:
   pattern:
