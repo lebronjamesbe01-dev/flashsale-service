@@ -274,7 +274,7 @@ Nếu RabbitMQ từ chối một sự kiện, sự kiện đó được gửi l�
 
 ### Bảo mật
 
-- Mật khẩu được mã hoá một chiều (BCrypt). OTP không lưu dạng gốc, hết hạn sau 5 phút, nhập sai 5 lần thì bị huỷ.
+- Mật khẩu được băm một chiều bằng Argon2id (19 MiB, 2 vòng, theo khuyến nghị OWASP). Mỗi instance chỉ băm tối đa số lõi CPU cùng lúc để đợt đăng nhập dồn dập không làm tràn bộ nhớ. Hash BCrypt cũ (tài khoản demo) vẫn đăng nhập được và tự đổi sang Argon2id ở lần đăng nhập đúng đầu tiên. OTP không lưu dạng gốc, hết hạn sau 5 phút, nhập sai 5 lần thì bị huỷ.
 - **Không để lộ ai đã có tài khoản:** đăng ký luôn trả cùng một câu trả lời; đăng nhập sai mật khẩu hay email không tồn tại đều nhận cùng một lỗi, với thời gian phản hồi như nhau.
 - Mật khẩu được đặt lúc nhập OTP, không phải lúc đăng ký. Người khác đăng ký trước bằng email của bạn cũng không chiếm được tài khoản, vì chỉ người đọc được OTP mới đặt được mật khẩu.
 - Đăng xuất làm token hết hiệu lực ngay lập tức. Refresh token chỉ dùng được một lần; nếu token cũ bị dùng lại (dấu hiệu bị đánh cắp), toàn bộ phiên đăng nhập đó bị huỷ.

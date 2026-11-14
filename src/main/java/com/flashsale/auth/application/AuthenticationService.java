@@ -67,13 +67,18 @@ public class AuthenticationService {
     @Transactional
     public TokenPair login(Identifier identifier, String rawPassword) {
         Optional<User> found = users.findByIdentifier(identifier.value());
-        // Always run one BCrypt check so "no such user" costs the same time as "wrong password".
+        // Always run one hash check so "no such user" costs the same time as "wrong password".
         String hash = found.map(User::passwordHash).orElse(dummyPasswordHash);
         boolean passwordOk = passwordEncoder.matches(rawPassword, hash);
         if (found.isEmpty() || !passwordOk || !found.get().isActive()) {
             throw new BusinessException(ErrorCode.INVALID_CREDENTIALS);
         }
-        return issueTokens(found.get(), UUID.randomUUID());
+        User user = found.get();
+        // An old BCrypt hash is rewritten as Argon2id now that the plain password is known.
+        if (passwordEncoder.upgradeEncoding(hash)) {
+            users.rehashPassword(user.id(), hash, passwordEncoder.encode(rawPassword));
+        }
+        return issueTokens(user, UUID.randomUUID());
     }
 
     @Transactional(noRollbackFor = BusinessException.class)

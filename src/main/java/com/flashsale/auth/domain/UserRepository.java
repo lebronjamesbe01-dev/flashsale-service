@@ -37,4 +37,14 @@ public interface UserRepository extends JpaRepository<User, UUID> {
             @Param("id") UUID id,
             @Param("passwordHash") String passwordHash,
             @Param("now") Instant now);
+
+    /** Replaces a password hash with a stronger one, only if it was not changed meanwhile. */
+    @Modifying(flushAutomatically = true)
+    @Query(
+            "update User u set u.passwordHash = :newHash, u.version = u.version + 1"
+                    + " where u.id = :id and u.passwordHash = :oldHash")
+    int rehashPassword(
+            @Param("id") UUID id,
+            @Param("oldHash") String oldHash,
+            @Param("newHash") String newHash);
 }

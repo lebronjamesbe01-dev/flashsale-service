@@ -91,7 +91,7 @@ erDiagram
         uuid id PK
         varchar identifier UK "email hoặc phone E.164"
         varchar identifier_type "EMAIL | PHONE"
-        varchar password_hash "BCrypt"
+        varchar password_hash "Argon2id"
         varchar status "PENDING | ACTIVE | LOCKED (chưa có API khoá)"
         varchar role "USER | ADMIN"
     }
@@ -213,7 +213,7 @@ sequenceDiagram
     U->>API: POST /auth/verify-otp {identifier, otp, password}
     API->>R: Lấy OTP, so sánh constant-time
     alt Đúng
-        API->>DB: status = ACTIVE + password_hash = BCrypt(password)<br/>(chỉ khi đang PENDING), mở ví số dư 0
+        API->>DB: status = ACTIVE + password_hash = Argon2id(password)<br/>(chỉ khi đang PENDING), mở ví số dư 0
         Note over API,DB: Mật khẩu đặt ở bước này: chỉ người đọc được OTP mới đặt được,<br/>nên đăng ký trước bằng identifier của người khác không chiếm được tài khoản
         API->>R: Xoá OTP
         API-->>U: 200 Đã kích hoạt
@@ -235,7 +235,7 @@ sequenceDiagram
 
     U->>API: POST /auth/login {identifier, password}
     API->>DB: Tìm user
-    API->>API: BCrypt verify (user không tồn tại vẫn verify hash giả để chống đo thời gian)
+    API->>API: Argon2id verify (user không tồn tại vẫn verify hash giả để chống đo thời gian)<br/>hash BCrypt cũ vẫn đăng nhập được và được đổi sang Argon2id
     alt Sai hoặc chưa ACTIVE
         API-->>U: 401 INVALID_CREDENTIALS (một thông báo chung)
     else Đúng

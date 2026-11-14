@@ -20,6 +20,8 @@ import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.http.MediaType;
+import org.springframework.jdbc.core.simple.JdbcClient;
+import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.ResultActions;
 import tools.jackson.databind.JsonNode;
@@ -35,6 +37,7 @@ class AuthFlowIntegrationTest {
     @Autowired JsonMapper json;
     @Autowired NotificationMessageRepository messages;
     @Autowired StringRedisTemplate redis;
+    @Autowired JdbcClient jdbc;
 
     @Test
     void fullLifecycle_register_verify_login_me_refresh_logout() throws Exception {
@@ -198,8 +201,8 @@ class AuthFlowIntegrationTest {
     }
 
     @Test
-    void passwordLongerThan72BytesIsRejectedWith400() throws Exception {
-        String tooLong = "Ab1" + "\u00e9".repeat(40); // 43 characters, 83 UTF-8 bytes
+    void passwordLongerThan128BytesIsRejectedWith400() throws Exception {
+        String tooLong = "Ab1" + "\u00e9".repeat(63); // 66 characters, 129 UTF-8 bytes
         register(uniqueEmail(), tooLong)
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.code").value("VALIDATION_FAILED"))
@@ -262,6 +265,38 @@ class AuthFlowIntegrationTest {
                                 .content(refreshBody(victimRefresh)))
                 .andExpect(status().isNoContent());
         post("/api/v1/auth/refresh", refreshBody(victimRefresh)).andExpect(status().isOk());
+    }
+
+    @Test
+    void newPasswordsAreStoredAsArgon2id() throws Exception {
+        String email = activatedUser();
+        assertThat(storedHash(email)).startsWith("{argon2}$argon2id$");
+    }
+
+    @Test
+    void legacyBcryptHashStillLogsInAndIsRewrittenAsArgon2id() throws Exception {
+        String email = uniqueEmail();
+        String bcrypt = new BCryptPasswordEncoder(4).encode(PASSWORD);
+        jdbc.sql(
+                        "insert into users (id, identifier, identifier_type, password_hash, status,"
+                                + " role, created_at, updated_at)"
+                                + " values (?, ?, 'EMAIL', ?, 'ACTIVE', 'USER', now(), now())")
+                .params(UUID.randomUUID(), email, bcrypt)
+                .update();
+
+        login(email, "Wrong999").andExpect(status().isUnauthorized());
+        assertThat(storedHash(email)).isEqualTo(bcrypt);
+
+        login(email, PASSWORD).andExpect(status().isOk());
+        assertThat(storedHash(email)).startsWith("{argon2}$argon2id$");
+        login(email, PASSWORD).andExpect(status().isOk());
+    }
+
+    private String storedHash(String email) {
+        return jdbc.sql("select password_hash from users where identifier = ?")
+                .param(email)
+                .query(String.class)
+                .single();
     }
 
     private String activatedUser() throws Exception {

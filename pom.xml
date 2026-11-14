@@ -20,6 +20,7 @@
         <java.version>27</java.version>
         <springdoc.version>3.2.0</springdoc.version>
         <libphonenumber.version>9.0.43</libphonenumber.version>
+        <bouncycastle.version>1.87</bouncycastle.version>
         <archunit.version>1.5.1</archunit.version>
         <spotless.version>3.11.0</spotless.version>
         <google-java-format.version>2.0.0</google-java-format.version>
@@ -41,6 +42,12 @@
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-security-oauth2-resource-server</artifactId>
+        </dependency>
+        <dependency>
+            <!-- Argon2 implementation used by Spring Security's Argon2PasswordEncoder -->
+            <groupId>org.bouncycastle</groupId>
+            <artifactId>bcprov-jdk18on</artifactId>
+            <version>${bouncycastle.version}</version>
         </dependency>
         <dependency>
             <groupId>com.googlecode.libphonenumber</groupId>
